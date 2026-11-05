@@ -4,7 +4,6 @@ import androidx.compose.ui.test.onFirst
 import com.slopus.happy.ui.isOnActivePage
 import com.slopus.happy.ui.components.HeaderTags
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
@@ -107,21 +106,19 @@ class LifecycleJourneyTest {
         // The second chat archived from its Session Info: the first takes its place.
         rule.onNode(hasText("Second chat"), useUnmergedTree = true).performClick()
         rule.waitFor(ChatScreenTags.SCREEN)
-        // Tabs are the project layout's: the chats of one checkout.
+        // The project layout hands an archived chat on to its checkout's next one; home lists them, so the chat shows no tab strip.
         graph.settings.change { it.copy(sessionListGrouping = SessionListGrouping.Project) }
-        rule.waitFor(WorktreeTabTags.tab("a1"))
         rule.waitForIdle()
+        rule.node(WorktreeTabTags.STRIP).assertDoesNotExist()
         openInfo()
         rule.waitFor(SessionInfoTags.ARCHIVE)
         rule.assertActionsLabelled()
         rule.node(SessionInfoTags.ARCHIVE).performScrollTo().performClick()
         rule.waitUntil(10_000) { server.requestsTo("/v1/sessions/a2/archive").isNotEmpty() }
-        // The checkout's chat now: its tab is the only one left, and the archived chat's is gone.
+        // The checkout's other chat takes the screen, by its own name.
         rule.waitUntil(10_000) {
-            rule.onAllNodes(hasTestTag(WorktreeTabTags.tab("a2")), useUnmergedTree = true).fetchSemanticsNodes().isEmpty() &&
-                rule.onAllNodes(hasTestTag(WorktreeTabTags.tab("a1")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodes(hasTestTag(HeaderTags.TITLE) and (hasText("First chat") or hasAnyDescendant(hasText("First chat"))), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
         }
-        rule.node(WorktreeTabTags.tab("a1")).assertIsSelected()
     }
 
     @Test

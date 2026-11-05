@@ -266,8 +266,10 @@ win:
   speaks for its chats (shimmer, dot) and is the selected row on a tablet
   while one of them is open; an open one shows only its line counts. A
   chat's row opens it, long-presses to its menu and swipes to archive as a
-  flat row does, the action's glyph without its words in 48. The tabs in
-  the chat stay.
+  flat row does, the action's glyph without its words in 48. The chat
+  has no checkout tab strip under its header (`WorktreeTabStrip` is no
+  longer placed), and its header names the chat itself, as in the flat
+  list.
 - **First screen** (`ui/start`), a splash shown only while the phone has
   no Happy account and no agent connection; never again once one is
   added. Deliberately not iOS's:
