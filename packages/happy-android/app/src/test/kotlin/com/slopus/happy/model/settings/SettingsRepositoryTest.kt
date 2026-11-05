@@ -101,6 +101,16 @@ class SettingsRepositoryTest {
         assertEquals(JsonPrimitive(1), reread.unknown["future"])
     }
 
+    /** Android's own key: the grouped home's folded checkouts, kept on the phone across a reread. */
+    @Test
+    fun localSettingsKeepTheFoldedCheckouts() {
+        val prefs = context.getSharedPreferences(LocalSettings.PREFS_NAME, Context.MODE_PRIVATE).also { it.edit().clear().commit() }
+        val folded = mapOf("p\u0000" to true, "p\u0000w1" to true)
+        assertEquals(emptyMap<String, Boolean>(), LocalSettings(prefs).values.value.collapsedCheckouts)
+        prefs.edit().putString("local-settings", LocalSettingsValues(collapsedCheckouts = folded).toJson().toString()).commit()
+        assertEquals(folded, LocalSettings(prefs).values.value.collapsedCheckouts)
+    }
+
     @Test
     fun localSettingsWithABadFieldAreTheDefaults() {
         assertEquals(LocalSettingsValues.Defaults, LocalSettingsValues.parse(json("""{"zenMode":"yes","debugMode":true}""")))

@@ -29,13 +29,15 @@ data class ProjectWorktree(
     val machineId: String?,
 )
 
-/** A project's card: it goes by the project's name and opens the project's own checkout. */
+/** A project's card: it goes by the project's name and heads the project's own checkout. */
 @Immutable
 data class ProjectHomeEntry(
     val id: String,
     val name: String,
     /** Null for a project that only has worktrees. */
     val session: SessionRowData?,
+    /** The project's own checkout ([worktreePlaceId]), which its row folds; null for a project that only has worktrees. */
+    val checkoutId: String? = null,
     val tabs: List<SessionRowData>,
     /** Supplies the avatar: a worktree's chat when there is no own checkout. */
     val avatarSession: SessionRowData?,
@@ -82,13 +84,24 @@ sealed interface ProjectHomeRow {
         override val key get() = "task-${session.id}"
     }
 
-    data class ProjectCard(val project: ProjectHomeEntry) : ProjectHomeRow {
+    /** [collapsed]: the project's own chats are folded away under it. */
+    data class ProjectCard(val project: ProjectHomeEntry, val collapsed: Boolean = false) : ProjectHomeRow {
         override val key get() = "project-${project.id}"
     }
 
-    /** [last] closes the tree line from the project's avatar. */
-    data class Worktree(val worktree: ProjectWorktree, val last: Boolean) : ProjectHomeRow {
+    /** [last] closes the tree line from the project's avatar; [collapsed]: its chats are folded away under it. */
+    data class Worktree(val worktree: ProjectWorktree, val last: Boolean, val collapsed: Boolean = false) : ProjectHomeRow {
         override val key get() = "worktree-${worktree.id}"
+    }
+
+    /**
+     * A chat of an open checkout, by its own name: under its project's row,
+     * or one step further in under its worktree when [nested]. [last] closes
+     * the tree line it hangs on; [throughTrunk], on a nested chat, is its
+     * project's line running on past it to the next worktree or the toggle.
+     */
+    data class Chat(val session: SessionRowData, val nested: Boolean, val last: Boolean, val throughTrunk: Boolean = false) : ProjectHomeRow {
+        override val key get() = "chat-${session.id}"
     }
 
     data class Toggle(val toggle: WorktreeToggle) : ProjectHomeRow {
@@ -124,9 +137,9 @@ fun workspaceOrigin(session: SessionRowData): WorkspaceOrigin? {
     return WorkspaceOrigin(machineId, null, if (WorktreePaths.isWorktree(path)) WorktreePaths.repoPath(path) else path)
 }
 
-private data class Activity(val unread: Boolean, val working: Boolean, val blocked: Boolean)
+internal data class Activity(val unread: Boolean, val working: Boolean, val blocked: Boolean)
 
-private fun activity(sessions: List<SessionRowData>) = Activity(
+internal fun activity(sessions: List<SessionRowData>) = Activity(
     unread = sessions.any { it.hasUnread },
     working = sessions.any { it.state == SessionState.Thinking },
     blocked = sessions.any { it.state == SessionState.PermissionRequired || it.state == SessionState.InputRequired },
@@ -156,19 +169,30 @@ private fun toWorktree(project: ProjectGroupData, workspace: ProjectWorkspaceGro
     )
 }
 
-private fun projectRows(project: ProjectGroupData, expanded: Set<String>): List<ProjectHomeRow> {
+/**
+ * A project's rows: its card, its own chats while that checkout is open, then
+ * its first worktrees (or all of them once [expanded]), each followed by its
+ * chats while it is open. A checkout is open unless its id is in [collapsed].
+ */
+private fun projectRows(project: ProjectGroupData, expanded: Set<String>, collapsed: Set<String>): List<ProjectHomeRow> {
     val checkouts = project.workspaces.mapNotNull { toWorktree(project, it) }
     if (checkouts.isEmpty()) return emptyList()
     val primary = checkouts.find { it.workspaceId == "" }
     val worktrees = checkouts.filter { it.workspaceId != "" }
     val ownTabs = primary?.tabs.orEmpty()
     val own = activity(ownTabs)
+    val ownOpen = primary != null && primary.id !in collapsed
+    val isExpanded = project.id in expanded
+    val shown = if (isExpanded) worktrees else worktrees.take(WORKTREE_PREVIEW_COUNT)
+    val hidden = worktrees.drop(shown.size)
+    val togglable = if (isExpanded) worktrees.size > WORKTREE_PREVIEW_COUNT else hidden.isNotEmpty()
     val rows = mutableListOf<ProjectHomeRow>(
         ProjectHomeRow.ProjectCard(
             ProjectHomeEntry(
                 id = project.id,
                 name = project.name,
                 session = primary?.session,
+                checkoutId = primary?.id,
                 tabs = ownTabs,
                 avatarSession = primary?.session ?: worktrees.firstOrNull()?.session,
                 worktreeCount = worktrees.size,
@@ -177,14 +201,24 @@ private fun projectRows(project: ProjectGroupData, expanded: Set<String>): List<
                 blocked = own.blocked,
                 live = isLive(ownTabs),
             ),
+            collapsed = primary != null && !ownOpen,
         ),
     )
-    val isExpanded = project.id in expanded
-    val shown = if (isExpanded) worktrees else worktrees.take(WORKTREE_PREVIEW_COUNT)
-    val hidden = worktrees.drop(shown.size)
-    val togglable = if (isExpanded) worktrees.size > WORKTREE_PREVIEW_COUNT else hidden.isNotEmpty()
+    if (ownOpen) {
+        val closes = shown.isEmpty() && !togglable
+        ownTabs.forEachIndexed { index, session ->
+            rows.add(ProjectHomeRow.Chat(session, nested = false, last = closes && index == ownTabs.lastIndex))
+        }
+    }
     shown.forEachIndexed { index, worktree ->
-        rows.add(ProjectHomeRow.Worktree(worktree, last = !togglable && index == shown.size - 1))
+        val last = !togglable && index == shown.size - 1
+        val open = worktree.id !in collapsed
+        rows.add(ProjectHomeRow.Worktree(worktree, last, collapsed = !open))
+        if (open) {
+            worktree.tabs.forEachIndexed { i, session ->
+                rows.add(ProjectHomeRow.Chat(session, nested = true, last = i == worktree.tabs.lastIndex, throughTrunk = !last))
+            }
+        }
     }
     if (togglable) {
         val a = activity(hidden.flatMap { it.tabs })
@@ -214,9 +248,11 @@ private fun projectsByMachine(items: List<SessionListItem>, machineName: (String
 
 /**
  * buildProjectHomeRows: each computer, then its bots, its tasks, then its projects (a
- * card per project with its worktrees under it). Happy Agent computers lead,
- * then the most recently worked on; chats that name no computer go last. The
- * archive trails behind its toggle as the flat, date-grouped tail.
+ * card per project with its own chats, then its worktrees and theirs, under it).
+ * Happy Agent computers lead, then the most recently worked on; chats that name
+ * no computer go last. The archive trails behind its toggle as the flat,
+ * date-grouped tail. Every checkout lists its chats unless its id
+ * ([worktreePlaceId]) is in [collapsed] (Android's own; iOS lists a checkout's chats only as its tabs).
  */
 fun buildProjectHomeRows(
     items: List<SessionListItem>,
@@ -225,6 +261,7 @@ fun buildProjectHomeRows(
     expanded: Set<String>,
     hasArchivedSessions: Boolean = false,
     archiveHidden: Boolean = true,
+    collapsed: Set<String> = emptySet(),
 ): List<ProjectHomeRow> {
     val collator = Collator.getInstance()
     val sections = LinkedHashMap<String?, MachineSection>()
@@ -254,7 +291,7 @@ fun buildProjectHomeRows(
     for ((machineId, projects) in projectsByMachine(items, ::nameOf, collator)) {
         val section = sectionFor(machineId)
         for (project in projects) {
-            val built = projectRows(project, expanded)
+            val built = projectRows(project, expanded, collapsed)
             if (built.isEmpty()) continue
             section.projects.addAll(built)
             project.workspaces.forEach { w -> w.sessions.forEach { section.lastActivityAt = maxOf(section.lastActivityAt, it.lastActivityAt) } }

@@ -55,10 +55,18 @@ class ProjectHomeRowsTest {
         machine("machine-c", machineMetadata { put("displayName", "Terminal") }),
     ).associateBy { it.id }
 
-    private fun build(data: List<SessionListItem>, expanded: Set<String> = emptySet(), hasArchivedSessions: Boolean = false, archiveHidden: Boolean = true) =
-        buildProjectHomeRows(data, machines, "unknown", expanded, hasArchivedSessions, archiveHidden)
+    private fun build(
+        data: List<SessionListItem>,
+        expanded: Set<String> = emptySet(),
+        hasArchivedSessions: Boolean = false,
+        archiveHidden: Boolean = true,
+        collapsed: Set<String> = emptySet(),
+    ) = buildProjectHomeRows(data, machines, "unknown", expanded, hasArchivedSessions, archiveHidden, collapsed)
 
-    private fun shape(rows: List<ProjectHomeRow>): List<String> = rows.map { item ->
+    /** The rows without the checkouts' chats, which the tests below that are about the chats put back ([chats]). */
+    private fun skeleton(rows: List<ProjectHomeRow>) = rows.filterNot { it is ProjectHomeRow.Chat }
+
+    private fun shape(rows: List<ProjectHomeRow>, chats: Boolean = false): List<String> = (if (chats) rows else skeleton(rows)).map { item ->
         when (item) {
             is ProjectHomeRow.Section -> "section:${item.section}"
             is ProjectHomeRow.MachineHeader -> "machine:${item.machineName}"
@@ -66,6 +74,7 @@ class ProjectHomeRowsTest {
             is ProjectHomeRow.Task -> "task:${item.session.id}"
             is ProjectHomeRow.ProjectCard -> "project:${item.project.name}(${item.project.worktreeCount})"
             is ProjectHomeRow.Worktree -> "worktree:${item.worktree.workspaceName}${if (item.last) ":last" else ""}"
+            is ProjectHomeRow.Chat -> "${if (item.nested) "  " else ""}chat:${item.session.id}${if (item.last) ":last" else ""}${if (item.throughTrunk) ":through" else ""}"
             is ProjectHomeRow.Toggle -> if (item.toggle.expanded) "toggle:less" else "toggle:+${item.toggle.hiddenCount}"
             is ProjectHomeRow.ArchiveToggle -> if (item.hidden) "archive:show" else "archive:hide"
             is ProjectHomeRow.ArchiveHeader -> "archiveHeader:${item.title}"
@@ -110,10 +119,10 @@ class ProjectHomeRowsTest {
     }
 
     @Test fun eachWorktreeReportsItsOwnChatsAndTheCardOnlyItsOwn() {
-        val rows = build(listOf(project("happy", ProjectSource.Rig, listOf(
+        val rows = skeleton(build(listOf(project("happy", ProjectSource.Rig, listOf(
             ws("", null, row("a")),
             ws("w", "w", row("b", state = SessionState.PermissionRequired, hasUnread = true)),
-        ))))
+        )))))
         card(rows[2]).let { assertFalse(it.working); assertFalse(it.blocked); assertFalse(it.unread) }
         worktree(rows[3]).let { assertTrue(it.blocked); assertTrue(it.unread) }
     }
@@ -148,12 +157,12 @@ class ProjectHomeRowsTest {
             (1..3).map { ws("w$it", "w$it", row("s$it")) } +
             ws("w4", "w4", row("s4", state = SessionState.PermissionRequired, hasUnread = true))
 
-        val folded = build(listOf(project("happy", ProjectSource.Rig, held)))
+        val folded = skeleton(build(listOf(project("happy", ProjectSource.Rig, held))))
         toggle(folded[6]).let { assertEquals(1, it.hiddenCount); assertTrue(it.blocked); assertTrue(it.unread) }
         // The card never took this on: it answers for its own checkout only.
         card(folded[2]).let { assertFalse(it.blocked); assertFalse(it.unread) }
 
-        val open = build(listOf(project("happy", ProjectSource.Rig, held)), setOf("rig:happy"))
+        val open = skeleton(build(listOf(project("happy", ProjectSource.Rig, held)), setOf("rig:happy")))
         toggle(open[7]).let {
             assertTrue(it.expanded)
             assertEquals(0, it.hiddenCount)
@@ -163,7 +172,7 @@ class ProjectHomeRowsTest {
     }
 
     @Test fun treeLineRunsThroughTheToggle() {
-        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(4))))
+        val rows = skeleton(build(listOf(project("happy", ProjectSource.Rig, worktrees(4)))))
         assertFalse((rows[5] as ProjectHomeRow.Worktree).last)
         assertTrue(rows[6] is ProjectHomeRow.Toggle)
     }
@@ -173,6 +182,80 @@ class ProjectHomeRowsTest {
         assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(1)", "worktree:Vilnius:last"), shape(rows))
         assertNull(card(rows[2]).session)
         assertEquals("a", card(rows[2]).avatarSession?.id)
+    }
+
+    // Android's own: every checkout lists its chats, oldest first, until it is folded.
+    @Test fun everyCheckoutListsItsChatsByDefaultOldestFirst() {
+        val rows = build(listOf(project("happy", ProjectSource.Rig, listOf(
+            ws("", null, row("late", createdAt = 20), row("early", createdAt = 10)),
+            ws("g", "Gdansk", row("g2", createdAt = 2), row("g1", createdAt = 1)),
+        ))))
+        assertEquals(
+            listOf(
+                "machine:Studio", "section:Projects", "project:happy(1)", "chat:early", "chat:late",
+                "worktree:Gdansk:last", "  chat:g1", "  chat:g2:last",
+            ),
+            shape(rows, chats = true),
+        )
+        assertFalse((rows[2] as ProjectHomeRow.ProjectCard).collapsed)
+        assertFalse((rows[5] as ProjectHomeRow.Worktree).collapsed)
+    }
+
+    @Test fun aProjectsOwnChatsCloseItsLineWhenNoWorktreeFollows() {
+        val rows = build(listOf(project("shop-box", ProjectSource.Rig, listOf(ws("", null, row("b", createdAt = 2), row("a", createdAt = 1))))))
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:shop-box(0)", "chat:a", "chat:b:last"), shape(rows, chats = true))
+    }
+
+    @Test fun aWorktreesChatsCarryTheProjectsLineOnToTheNextWorktreeAndTheToggle() {
+        assertEquals(
+            listOf(
+                "machine:Studio", "section:Projects", "project:happy(4)", "chat:own",
+                "worktree:w1", "  chat:s1:last:through",
+                "worktree:w2", "  chat:s2:last:through",
+                "worktree:w3", "  chat:s3:last:through",
+                "toggle:+1",
+            ),
+            shape(build(listOf(project("happy", ProjectSource.Rig, worktrees(4)))), chats = true),
+        )
+    }
+
+    @Test fun heldBackWorktreesListNoChats() {
+        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(5))))
+        assertEquals(listOf("own", "s1", "s2", "s3"), rows.filterIsInstance<ProjectHomeRow.Chat>().map { it.session.id })
+    }
+
+    @Test fun foldingTheProjectsOwnCheckoutLeavesItsWorktreesOpen() {
+        val own = worktreePlaceId("rig:happy", "")
+        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(1))), collapsed = setOf(own))
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(1)", "worktree:w1:last", "  chat:s1:last"), shape(rows, chats = true))
+        (rows[2] as ProjectHomeRow.ProjectCard).let {
+            assertTrue(it.collapsed)
+            assertEquals(own, it.project.checkoutId)
+        }
+    }
+
+    @Test fun foldingAWorktreeLeavesTheRestOpen() {
+        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(2))), collapsed = setOf(worktreePlaceId("rig:happy", "w1")))
+        assertEquals(
+            listOf("machine:Studio", "section:Projects", "project:happy(2)", "chat:own", "worktree:w1", "worktree:w2:last", "  chat:s2:last"),
+            shape(rows, chats = true),
+        )
+        assertTrue((rows[4] as ProjectHomeRow.Worktree).collapsed)
+        assertFalse((rows[5] as ProjectHomeRow.Worktree).collapsed)
+    }
+
+    @Test fun aProjectWithOnlyWorktreesHasNoCheckoutToFold() {
+        val rows = build(listOf(project("happy", ProjectSource.Rig, listOf(ws("w", "Vilnius", row("a"))))))
+        (rows[2] as ProjectHomeRow.ProjectCard).let {
+            assertNull(it.project.checkoutId)
+            assertFalse(it.collapsed)
+        }
+    }
+
+    // A chat is only ever one row of the list, which keys on it.
+    @Test fun everyChatRowHasAKeyOfItsOwn() {
+        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(3))))
+        assertEquals(rows.size, rows.map { it.key }.toSet().size)
     }
 
     @Test fun cardIsLiveOnlyWhileAChatRunsOnAReachableMachine() {

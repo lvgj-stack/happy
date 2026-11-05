@@ -28,6 +28,8 @@ class HomeListCallbacks(
     val onProjectMenu: (projectName: String, origin: WorkspaceOrigin) -> Unit,
     /** A finger landed on a session's row, before it is a tap (useSessionPressHandlers' onPressIn). */
     val onPressDown: (sessionId: String) -> Unit = {},
+    /** Grouped by project: fold a checkout's chats away, or list them again. */
+    val onToggleCheckout: (checkoutId: String) -> Unit = {},
 )
 
 /**

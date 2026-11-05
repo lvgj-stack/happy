@@ -82,15 +82,15 @@ private val HomeRow.isCardRow: Boolean
         is HomeRow.Chat -> true
         is HomeRow.Project -> when (row) {
             is ProjectHomeRow.Bot, is ProjectHomeRow.Task, is ProjectHomeRow.ProjectCard, is ProjectHomeRow.Worktree,
-            is ProjectHomeRow.Toggle, is ProjectHomeRow.Archived -> true
+            is ProjectHomeRow.Chat, is ProjectHomeRow.Toggle, is ProjectHomeRow.Archived -> true
             else -> false
         }
         is HomeRow.ArchiveToggle, is HomeRow.DayHeader -> false
     }
 
-/** A worktree or the toggle ending them: on its project's tree line, which already joins it to the row above. */
+/** A checkout's chat, a worktree or the toggle ending them: on its project's tree line, which already joins it to the row above. */
 private val HomeRow.hangsOnTree: Boolean
-    get() = this is HomeRow.Project && (row is ProjectHomeRow.Worktree || row is ProjectHomeRow.Toggle)
+    get() = this is HomeRow.Project && (row is ProjectHomeRow.Chat || row is ProjectHomeRow.Worktree || row is ProjectHomeRow.Toggle)
 
 /**
  * [rows] in cards: rows run together into one card until a heading, a gap
@@ -156,6 +156,8 @@ data class HomeListInputs(
     val expandedProjects: Set<String>,
     val unreadSessionIds: Set<String>,
     val archivingSessionIds: Set<String>,
+    /** Grouped by project: the checkouts whose chats are folded away. */
+    val collapsedCheckouts: Set<String> = emptySet(),
 )
 
 /**
@@ -177,7 +179,7 @@ fun deriveHomeList(inputs: HomeListInputs, zone: ZoneId, today: LocalDate): Home
     val online = choices.count { it.online }
     val rows = when (inputs.grouping) {
         SessionListGrouping.Flat -> flatRows(visible, hasArchived, inputs.archiveHidden)
-        SessionListGrouping.Project -> buildProjectHomeRows(visible, machines, "", inputs.expandedProjects, hasArchived, inputs.archiveHidden)
+        SessionListGrouping.Project -> buildProjectHomeRows(visible, machines, "", inputs.expandedProjects, hasArchived, inputs.archiveHidden, collapsed = inputs.collapsedCheckouts)
             .map(HomeRow::Project)
     }
     return HomeListState(
@@ -253,11 +255,12 @@ class HomeListModel(
     val state: StateFlow<HomeListState?> = combine(
         snapshots.filterNotNull().filter { it.ready },
         settings.map { it.sessionListGrouping to it.hideInactiveSessions }.distinctUntilChanged(),
-        localSettings.map { values -> values.expandedProjects.filterValues { it }.keys }.distinctUntilChanged(),
+        localSettings.map { values -> values.expandedProjects.filterValues { it }.keys to values.collapsedCheckouts.filterValues { it }.keys }
+            .distinctUntilChanged(),
         unreadSessionIds,
         archivingSessionIds,
-    ) { snapshot, (grouping, archiveHidden), expanded, unread, archiving ->
-        HomeListInputs(snapshot, grouping, archiveHidden, expanded, unread, archiving)
+    ) { snapshot, (grouping, archiveHidden), (expanded, collapsed), unread, archiving ->
+        HomeListInputs(snapshot, grouping, archiveHidden, expanded, unread, archiving, collapsed)
     }
         .distinctUntilChanged()
         .map { inputs ->

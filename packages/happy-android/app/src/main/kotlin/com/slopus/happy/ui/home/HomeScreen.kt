@@ -330,8 +330,9 @@ private fun HomeCardItem(entry: HomeCardEntry, callbacks: HomeListCallbacks, sel
         is HomeRow.ArchiveToggle -> ArchiveToggleRow(row.hidden, row.banded, callbacks, carded = true)
         is HomeRow.DayHeader -> Unit
         is HomeRow.Project -> if (place != null) {
-            HomeCardRow(place, ProjectListSpec.cardRowHeight(row.row), ProjectListSpec.nameX, tag = HomeTags.CARD_ROW, selected = selectedSessionId != null && row.row.shows(selectedSessionId)) {
-                ProjectHomeRowContent(row.row, callbacks, carded = true)
+            val selected = selectedSessionId != null && row.row.shows(selectedSessionId)
+            HomeCardRow(place, ProjectListSpec.cardRowHeight(row.row), ProjectListSpec.nameX, tag = HomeTags.CARD_ROW, selected = selected) {
+                ProjectHomeRowContent(row.row, callbacks, carded = true, selected = selected)
             }
         } else {
             ProjectHomeRowContent(row.row, callbacks, carded = true)
@@ -339,13 +340,17 @@ private fun HomeCardItem(entry: HomeCardEntry, callbacks: HomeListCallbacks, sel
     }
 }
 
-/** Whether [sessionId]'s chat is what this row opens: a bot's, a task's, a project's checkout, or one of a worktree's tabs. */
+/**
+ * Whether [sessionId]'s chat is this row's: a bot's, a task's, a checkout's
+ * chat, or one folded away under a collapsed checkout's row.
+ */
 private fun ProjectHomeRow.shows(sessionId: String): Boolean = when (this) {
     is ProjectHomeRow.Bot -> session.id == sessionId
     is ProjectHomeRow.Task -> session.id == sessionId
     is ProjectHomeRow.Archived -> session.id == sessionId
-    is ProjectHomeRow.ProjectCard -> project.session?.id == sessionId
-    is ProjectHomeRow.Worktree -> worktree.tabs.any { it.id == sessionId } || worktree.session.id == sessionId
+    is ProjectHomeRow.Chat -> session.id == sessionId
+    is ProjectHomeRow.ProjectCard -> collapsed && project.tabs.any { it.id == sessionId }
+    is ProjectHomeRow.Worktree -> collapsed && worktree.tabs.any { it.id == sessionId }
     else -> false
 }
 

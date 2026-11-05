@@ -1,5 +1,6 @@
 package com.slopus.happy.ui.home
 
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
@@ -102,8 +103,9 @@ class SessionPressDownTest {
         assertEquals(false, "open a" in events)
     }
 
+    // A project's or a worktree's row folds its chats (no chat to preload); each chat's own row reports it.
     @Test
-    fun projectWorktreeAndChatRowsReportTheirSession() {
+    fun checkoutChatRowsReportTheirSession() {
         val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
         show(
             listOf(
@@ -113,6 +115,9 @@ class SessionPressDownTest {
             SessionListGrouping.Project,
             rig,
         )
+        val chats = rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true)
+        chats[0].performTouchInput { down(center); up() }
+        chats[1].performTouchInput { down(center); up() }
         rule.node(ProjectListTags.PROJECT).performTouchInput { down(center); up() }
         rule.node(ProjectListTags.WORKTREE).performTouchInput { down(center); up() }
         rule.waitForIdle()

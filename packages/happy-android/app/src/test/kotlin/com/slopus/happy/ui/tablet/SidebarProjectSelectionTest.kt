@@ -14,6 +14,7 @@ import com.slopus.happy.model.HomeModelFixtures.machineMetadata
 import com.slopus.happy.model.HomeModelFixtures.rigMetadata
 import com.slopus.happy.model.HomeModelFixtures.session
 import com.slopus.happy.model.SessionListGrouping
+import com.slopus.happy.model.worktreePlaceId
 import com.slopus.happy.net.ConnectionStatus
 import com.slopus.happy.ui.PHONE
 import com.slopus.happy.ui.home.HomeListCallbacks
@@ -35,8 +36,8 @@ import java.time.ZoneOffset
 
 /**
  * The sidebar marks the row of what the main panel shows on a Happy CLI
- * account grouped by project too: a project's own checkout, or the
- * worktree whose chat is open, and nothing else.
+ * account grouped by project too: the open chat's own row, or, while its
+ * checkout is folded, the project's or the worktree's, and nothing else.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(qualifiers = PHONE)
@@ -50,14 +51,14 @@ class SidebarProjectSelectionTest {
         onOpenMachine = {}, onCreateWorkspace = {}, onProjectMenu = { _, _ -> },
     )
 
-    private fun show(open: String) {
+    private fun show(open: String, collapsed: Set<String> = emptySet()) {
         val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
         val sessions = listOf(
             session("own", metadata = rigMetadata(projectId = "p1", projectName = "happy"), lastMessageSentAt = noon),
             session("wt", metadata = rigMetadata(projectId = "p1", projectName = "happy", workspaceId = "w1", workspaceName = "Gdansk"), lastMessageSentAt = noon),
         )
         val state = deriveHomeList(
-            HomeListInputs(HomeSnapshot(sessions, listOf(rig)), SessionListGrouping.Project, true, emptySet(), emptySet(), emptySet()),
+            HomeListInputs(HomeSnapshot(sessions, listOf(rig)), SessionListGrouping.Project, true, emptySet(), emptySet(), emptySet(), collapsed),
             ZoneOffset.UTC,
             LocalDate.of(2026, 10, 16),
         )
@@ -69,19 +70,37 @@ class SidebarProjectSelectionTest {
     }
 
     private fun card(of: String) = rule.onNode(hasTestTag(HomeTags.CARD_ROW) and hasAnyDescendant(hasTestTag(of)), useUnmergedTree = true)
+    private fun chats() = rule.onAllNodes(hasTestTag(HomeTags.CARD_ROW) and hasAnyDescendant(hasTestTag(ProjectListTags.CHECKOUT_CHAT)), useUnmergedTree = true)
 
     private val notSelected = SemanticsMatcher("is not selected") { SemanticsProperties.Selected !in it.config }
 
     @Test
-    fun theProjectsOwnCheckoutIsSelected() {
+    fun theOpenChatsOwnRowIsSelected() {
         show("own")
-        card(ProjectListTags.PROJECT).assertIsSelected()
+        chats()[0].assertIsSelected()
+        chats()[1].assert(notSelected)
+        card(ProjectListTags.PROJECT).assert(notSelected)
         card(ProjectListTags.WORKTREE).assert(notSelected)
     }
 
     @Test
-    fun theWorktreeWhoseChatIsOpenIsSelected() {
+    fun aWorktreesChatIsSelectedOnItsOwnRow() {
         show("wt")
+        chats()[1].assertIsSelected()
+        chats()[0].assert(notSelected)
+        card(ProjectListTags.WORKTREE).assert(notSelected)
+    }
+
+    @Test
+    fun aFoldedProjectStandsForItsOpenChat() {
+        show("own", collapsed = setOf(worktreePlaceId("p1", "")))
+        card(ProjectListTags.PROJECT).assertIsSelected()
+        chats()[0].assert(notSelected)
+    }
+
+    @Test
+    fun aFoldedWorktreeStandsForItsOpenChat() {
+        show("wt", collapsed = setOf(worktreePlaceId("p1", "w1")))
         card(ProjectListTags.WORKTREE).assertIsSelected()
         card(ProjectListTags.PROJECT).assert(notSelected)
     }

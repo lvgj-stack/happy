@@ -44,6 +44,9 @@ import com.slopus.happy.model.HomeModelFixtures.rigMetadata
 import com.slopus.happy.model.HomeModelFixtures.session
 import com.slopus.happy.model.Session
 import com.slopus.happy.model.SessionListGrouping
+import com.slopus.happy.model.worktreePlaceId
+import kotlinx.serialization.json.JsonObjectBuilder
+import androidx.compose.ui.test.hasAnyDescendant
 import com.slopus.happy.net.ConnectionStatus
 import com.slopus.happy.sync.SessionPresence
 import com.slopus.happy.ui.PHONE
@@ -95,7 +98,9 @@ import java.time.ZoneOffset
  * - The archive toggle stands on the page between the live card and the
  *   archive's, with no day headings.
  * - ProjectHomeList: 52 project rows with a 28 avatar, 48 worktrees, in one
- *   card; a single computer heads nothing.
+ *   card; a single computer heads nothing. Android's own: every checkout
+ *   lists its chats by name, 48 each, the project's at 56 and a worktree's
+ *   at 96 under its 16 branch glyph, until a tap on its row folds them.
  * - SessionsListWrapper: spinner while loading, EmptyMainScreen's states.
  * - One changed session recomposes its own row and no other; nothing a row
  *   shows changes its height.
@@ -154,8 +159,9 @@ class HomeLayoutTest {
         hidden: Boolean = true,
         machines: List<com.slopus.happy.model.Machine> = listOf(studio),
         unread: Set<String> = emptySet(),
+        collapsed: Set<String> = emptySet(),
     ) = deriveHomeList(
-        HomeListInputs(HomeSnapshot(sessions, machines), grouping, hidden, emptySet(), unread, emptySet()),
+        HomeListInputs(HomeSnapshot(sessions, machines), grouping, hidden, emptySet(), unread, emptySet(), collapsed),
         ZoneOffset.UTC,
         LocalDate.of(2026, 10, 16),
     )
@@ -454,14 +460,11 @@ class HomeLayoutTest {
 
     @Test
     fun projectRowsReadAsButtons() {
-        val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
-        val sessions = listOf(
-            session("own", metadata = rigMetadata(projectId = "p1", projectName = "happy"), lastMessageSentAt = noon),
-            session("wt", metadata = rigMetadata(projectId = "p1", projectName = "happy", workspaceId = "w1", workspaceName = "Gdansk"), lastMessageSentAt = noon),
-        )
-        show(state(sessions, grouping = SessionListGrouping.Project, machines = listOf(rig)))
+        show(state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig)))
         rule.node(ProjectListTags.PROJECT).assert(hasRole(Role.Button))
         rule.onNodeWithTag(ProjectListTags.WORKTREE).assert(hasRole(Role.Button) and hasText("Gdansk"))
+        rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT)[0].assert(hasRole(Role.Button) and hasText("Fix login"))
+        rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT)[1].assert(hasRole(Role.Button) and hasText("Ship it"))
         rule.onNode(hasContentDescription("Create workspace in happy", substring = true) and hasRole(Role.Button)).assertExists()
         rule.assertActionsLabelled()
     }
@@ -496,28 +499,156 @@ class HomeLayoutTest {
         assertEquals(listOf(HapticFeedbackType.ContextClick, HapticFeedbackType.ContextClick), ticks)
     }
 
+    private val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
+
+    private fun named(name: String): JsonObjectBuilder.() -> Unit = { put("summary", buildJsonObject { put("text", name); put("updatedAt", 1) }) }
+
+    /** happy's own chat, Fix login, and its worktree Gdansk's, Ship it. */
+    private val checkouts = listOf(
+        session("own", metadata = rigMetadata(projectId = "p1", projectName = "happy", extra = named("Fix login")), lastMessageSentAt = noon),
+        session(
+            "wt",
+            metadata = rigMetadata(projectId = "p1", projectName = "happy", workspaceId = "w1", workspaceName = "Gdansk", extra = named("Ship it")),
+            lastMessageSentAt = noon,
+        ),
+    )
+
     @Test
     fun projectRowsGeometry() {
-        val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
-        val sessions = listOf(
-            session("own", metadata = rigMetadata(projectId = "p1", projectName = "happy"), lastMessageSentAt = noon),
-            session("wt", metadata = rigMetadata(projectId = "p1", projectName = "happy", workspaceId = "w1", workspaceName = "Gdansk"), lastMessageSentAt = noon),
-        )
-        show(state(sessions, grouping = SessionListGrouping.Project, machines = listOf(rig)))
+        show(state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig)))
         // One computer heads nothing, and the projects' section heading is no more than the room above its card.
         rule.onAllNodesWithTag(ProjectListTags.MACHINE, useUnmergedTree = true).assertCountEquals(0)
         rule.onAllNodesWithTag(ProjectListTags.SECTION, useUnmergedTree = true).assertCountEquals(0)
+        val width = (PHONE_WIDTH - 32).dp
         val project = rule.node(ProjectListTags.PROJECT).bounds
-        assertBox("project row, in its card", project, 16.dp, barBottom + GlassSpec.feather + 8.dp, (PHONE_WIDTH - 32).dp, 52.dp)
+        assertBox("project row, in its card", project, 16.dp, barBottom + GlassSpec.feather + 8.dp, width, 52.dp)
+        val chats = rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true)
+        chats.assertCountEquals(2)
+        val own = chats[0].bounds
+        assertBox("the project's chat, under it", own, 16.dp, project.bottom, width, 48.dp)
         val worktree = rule.node(ProjectListTags.WORKTREE).bounds
-        assertBox("worktree, in the same card", worktree, 16.dp, project.bottom, (PHONE_WIDTH - 32).dp, 48.dp)
-        val stem = rule.node(ProjectListTags.TREE_STEM).bounds
-        assertDp("stem drops from the avatar", project.top + 40.dp, stem.top)
-        assertDp("stem centred on the avatar", 16 + 16 + 14, (stem.left + stem.right) / 2)
-        val trunk = rule.node(ProjectListTags.TREE_TRUNK).bounds
-        assertDp("last trunk stops at the elbow", worktree.top + 24.dp, trunk.bottom)
+        assertBox("worktree, after the project's chats", worktree, 16.dp, own.bottom, width, 48.dp)
+        val nested = chats[1].bounds
+        assertBox("the worktree's chat, under it", nested, 16.dp, worktree.bottom, width, 48.dp)
+
+        assertDp("the project's chat by its name, at 56", 16 + 56, rule.onNodeWithText("Fix login", useUnmergedTree = true).bounds.left)
+        assertDp("the branch glyph where a name starts", 16 + 56, rule.node(ProjectListTags.WORKTREE_ICON).bounds.left)
+        assertDp("the worktree's name 6 after its 16 glyph", 16 + 56 + 16 + 6, rule.onNodeWithText("Gdansk", useUnmergedTree = true).bounds.left)
+        assertDp("the worktree's chat one lane in, at 96", 16 + 96, rule.onNodeWithText("Ship it", useUnmergedTree = true).bounds.left)
+
+        val stems = rule.onAllNodesWithTag(ProjectListTags.TREE_STEM, useUnmergedTree = true)
+        stems.assertCountEquals(2)
+        stems[0].bounds.let {
+            assertDp("stem drops from the avatar", project.top + 40.dp, it.top)
+            assertDp("stem centred on the avatar", 16 + 16 + 14, (it.left + it.right) / 2)
+        }
+        stems[1].bounds.let {
+            assertDp("the worktree's stem drops from its glyph", worktree.top + 32.dp, it.top)
+            assertDp("to the row's foot", worktree.bottom, it.bottom)
+            assertDp("centred on the glyph", 16 + 56 + 8, (it.left + it.right) / 2)
+        }
+        val trunks = rule.onAllNodesWithTag(ProjectListTags.TREE_TRUNK, useUnmergedTree = true)
+        trunks.assertCountEquals(3)
+        trunks[0].bounds.let {
+            assertDp("the project's chat's trunk runs on to the worktree", own.bottom, it.bottom)
+            assertDp("down the avatar lane", 16 + 16 + 14, (it.left + it.right) / 2)
+        }
+        assertDp("last trunk stops at the elbow", worktree.top + 24.dp, trunks[1].bounds.bottom)
+        trunks[2].bounds.let {
+            assertDp("the worktree's last chat's trunk stops at its elbow", nested.top + 24.dp, it.bottom)
+            assertDp("under the glyph", 16 + 56 + 8, (it.left + it.right) / 2)
+        }
+        rule.onAllNodesWithTag(ProjectListTags.CHEVRON, useUnmergedTree = true).assertCountEquals(2)
         // The tree line joins them already: no hairline between.
         rule.onAllNodesWithTag(HomeCardTags.DIVIDER, useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    /** A worktree's chats carry its project's line on beside them while another worktree follows. */
+    @Test
+    fun theProjectsLineRunsOnBesideAWorktreesChats() {
+        val second = session(
+            "wt2",
+            metadata = rigMetadata(projectId = "p1", projectName = "happy", workspaceId = "w2", workspaceName = "Vilnius"),
+            lastMessageSentAt = noon - 1,
+        )
+        show(state(checkouts + second, grouping = SessionListGrouping.Project, machines = listOf(rig)))
+        val first = rule.onAllNodesWithTag(ProjectListTags.WORKTREE, useUnmergedTree = true)[0].bounds
+        val nested = rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true)[1].bounds
+        assertDp("the first worktree's chat under it", first.bottom, nested.top)
+        // The own chat's, the first worktree's, then the chat's own two: the project's line, then its worktree's.
+        val trunks = rule.onAllNodesWithTag(ProjectListTags.TREE_TRUNK, useUnmergedTree = true)
+        trunks[2].bounds.let {
+            assertDp("the project's line the whole row high", nested.top, it.top)
+            assertDp("the project's line the whole row high", nested.bottom, it.bottom)
+            assertDp("down the avatar lane", 16 + 16 + 14, (it.left + it.right) / 2)
+        }
+        assertDp("the worktree's line stops at the chat's elbow", nested.top + 24.dp, trunks[3].bounds.bottom)
+    }
+
+    @Test
+    fun aFoldedCheckoutKeepsOnlyItsRow() {
+        show(
+            state(
+                checkouts,
+                grouping = SessionListGrouping.Project,
+                machines = listOf(rig),
+                collapsed = setOf(worktreePlaceId("p1", ""), worktreePlaceId("p1", "w1")),
+            ),
+        )
+        rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true).assertCountEquals(0)
+        val project = rule.node(ProjectListTags.PROJECT).bounds
+        assertDp("the worktree right under its project", project.bottom, rule.node(ProjectListTags.WORKTREE).bounds.top)
+        // The project's stem still reaches its worktree; the folded worktree drops none.
+        rule.onAllNodesWithTag(ProjectListTags.TREE_STEM, useUnmergedTree = true).assertCountEquals(1)
+        rule.onAllNodesWithTag(ProjectListTags.CHEVRON, useUnmergedTree = true).assertCountEquals(2)
+    }
+
+    /** A tap on a checkout's row, or TalkBack's expand and collapse, folds it after a light tick; it opens no chat. */
+    @Test
+    fun aCheckoutsRowFoldsWithALightTick() {
+        val ticks = mutableListOf<HapticFeedbackType>()
+        val toggled = mutableListOf<String>()
+        val haptics = object : HapticFeedback {
+            override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+                ticks += hapticFeedbackType
+            }
+        }
+        val folding = HomeListCallbacks(
+            onOpen = { opened += it }, onMenu = {}, onArchive = {}, onSetArchiveHidden = {}, onToggleProject = {},
+            onOpenMachine = {}, onCreateWorkspace = {}, onProjectMenu = { _, _ -> }, onToggleCheckout = { toggled += it },
+        )
+        val state = state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig), collapsed = setOf(worktreePlaceId("p1", "w1")))
+        rule.setHappyContent {
+            CompositionLocalProvider(LocalHapticFeedback provides haptics) {
+                HomeScreen(state, ConnectionStatus.CONNECTED, SessionListGrouping.Project, folding, actions, accounts = accounts)
+            }
+        }
+        rule.node(ProjectListTags.PROJECT).performClick()
+        rule.node(ProjectListTags.PROJECT).performSemanticsAction(SemanticsActions.Collapse)
+        rule.node(ProjectListTags.WORKTREE).performClick()
+        rule.node(ProjectListTags.WORKTREE).performSemanticsAction(SemanticsActions.Expand)
+        assertEquals(listOf(worktreePlaceId("p1", ""), worktreePlaceId("p1", ""), worktreePlaceId("p1", "w1"), worktreePlaceId("p1", "w1")), toggled)
+        assertEquals(List(4) { HapticFeedbackType.ContextClick }, ticks)
+        assertTrue(opened.isEmpty())
+    }
+
+    @Test
+    fun aCheckoutsChatOpensOnTapShowsTheMenuOnLongPressAndSwipesToArchive() {
+        show(state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig)))
+        val chat = rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true)[0]
+        chat.performClick()
+        chat.performTouchInput { longClick() }
+        assertEquals(listOf("own"), opened)
+        assertEquals(listOf("own"), menus)
+        chat.performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        val row = chat.bounds
+        val action = rule.onAllNodesWithTag(FlatRowTags.ARCHIVE_ACTION, useUnmergedTree = true)[0]
+        assertBox("archive action, at the card's end", action.bounds, (PHONE_WIDTH - 16 - 112).dp, row.top, 112.dp, 48.dp)
+        // 48 high: the glyph alone, its words for TalkBack.
+        action.assert(hasAnyDescendant(hasContentDescription("Archive Session")))
+        action.performClick()
+        assertEquals(listOf("own"), archived)
     }
 
     @Test

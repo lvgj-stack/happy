@@ -42,7 +42,9 @@ import kotlinx.coroutines.launch
  * button (error red, white archive glyph over "Archive Session") and stops
  * there; it never overshoots. Releasing past half way leaves it open.
  * With [leave] it leaves a task instead: an exit glyph over "Leave task"
- * (happy-ios 36b11c5bf, as Happy Desktop's row control does).
+ * (happy-ios 36b11c5bf, as Happy Desktop's row control does). Without
+ * [labelled], for a row too short to hold the words at large text, the
+ * glyph stands alone and TalkBack reads the words.
  */
 @Composable
 internal fun SwipeToArchive(
@@ -50,6 +52,7 @@ internal fun SwipeToArchive(
     onArchive: () -> Unit,
     modifier: Modifier = Modifier,
     leave: Boolean = false,
+    labelled: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit,
 ) {
     val colors = HappyTheme.colors
@@ -72,15 +75,23 @@ internal fun SwipeToArchive(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Icon(if (leave) Ionicon.ExitOutline else Ionicon.ArchiveOutline, size = FlatRowSpec.swipeIcon, color = Color.White)
-                Text(
-                    text = stringResource(if (leave) R.string.task_leave else R.string.session_info_archive_session),
-                    style = FlatRowSpec.swipeText,
+                val label = stringResource(if (leave) R.string.task_leave else R.string.session_info_archive_session)
+                Icon(
+                    if (leave) Ionicon.ExitOutline else Ionicon.ArchiveOutline,
+                    size = FlatRowSpec.swipeIcon,
                     color = Color.White,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    modifier = Modifier.padding(top = 4.dp),
+                    contentDescription = if (labelled) null else label,
                 )
+                if (labelled) {
+                    Text(
+                        text = label,
+                        style = FlatRowSpec.swipeText,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
         }
         Box(

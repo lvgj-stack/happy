@@ -145,6 +145,12 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
                 alert = Alert(name, null, listOf(AlertButton(cancelLabel), AlertButton(createWorkspaceLabel) { onCreateWorkspace(origin) }))
             },
             onPressDown = { id -> graph.account.value?.messages?.preload(id) },
+            onToggleCheckout = { id ->
+                graph.localSettings.change { s ->
+                    val folded = s.collapsedCheckouts
+                    s.copy(collapsedCheckouts = if (folded[id] == true) folded - id else folded + (id to true))
+                }
+            },
         )
     }
     // Linking from the empty home approves the code with this account, as Settings' scan does (not

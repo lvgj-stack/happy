@@ -33,6 +33,12 @@ data class LocalSettingsValues(
     val acknowledgedCliVersions: Map<String, String> = emptyMap(),
     /** Projects showing every workspace, by project id. */
     val expandedProjects: Map<String, Boolean> = emptyMap(),
+    /**
+     * Checkouts whose chats the grouped home folds away, by checkout id
+     * (`worktreePlaceId`); every other one lists its chats. Android's own
+     * key, not in happy-app's schema.
+     */
+    val collapsedCheckouts: Map<String, Boolean> = emptyMap(),
     /** Ticked steps of the link-your-computer checklist, by step id. */
     val linkComputerChecklist: Map<String, Boolean> = emptyMap(),
     val unknown: JsonObject = EmptyJson,
@@ -52,6 +58,7 @@ data class LocalSettingsValues(
             "sidebarPanelActive" to sidebarPanelActive.toJson(),
             "acknowledgedCliVersions" to JsonObject(acknowledgedCliVersions.mapValues { JsonPrimitive(it.value) }),
             "expandedProjects" to JsonObject(expandedProjects.mapValues { JsonPrimitive(it.value) }),
+            "collapsedCheckouts" to JsonObject(collapsedCheckouts.mapValues { JsonPrimitive(it.value) }),
             "linkComputerChecklist" to JsonObject(linkComputerChecklist.mapValues { JsonPrimitive(it.value) }),
         ),
     )
@@ -96,6 +103,7 @@ data class LocalSettingsValues(
                     sidebarPanelActive = json["sidebarPanelActive"]?.orNull { asEnum(sidebarPanels) },
                     acknowledgedCliVersions = record("acknowledgedCliVersions") { asString() },
                     expandedProjects = record("expandedProjects") { asBoolean() },
+                    collapsedCheckouts = record("collapsedCheckouts") { asBoolean() },
                     linkComputerChecklist = record("linkComputerChecklist") { asBoolean() },
                     unknown = JsonObject(json - knownKeys),
                 )

@@ -148,7 +148,7 @@ class HomeListTest {
                 grouping = SessionListGrouping.Project,
             ),
         )
-        assertEquals(listOf("project:machine-machine-1", "project:section-projects:machine-1", "project:project-p1"), shape(state))
+        assertEquals(listOf("project:machine-machine-1", "project:section-projects:machine-1", "project:project-p1", "project:chat-s1"), shape(state))
         assertTrue((state.rows[2] as HomeRow.Project).row is ProjectHomeRow.ProjectCard)
     }
 

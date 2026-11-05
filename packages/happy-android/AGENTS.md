@@ -251,6 +251,23 @@ win:
   open account stays signed in. A Happy account added while one is open
   goes to that account's server; with an agent connection open, to the
   server chosen on the first screen.
+- **Home grouped by project** (Appearance's grouping; Android's own, iOS
+  and happy-app list a checkout's chats only as the chat's tabs): every
+  checkout lists its chats by name, oldest first as the tabs are, each a
+  48 row on the tree line (`ProjectHomeRow.Chat`, `ui/home/ProjectHomeList.kt`).
+  The project's own chats hang under its row at 56, then each worktree (a
+  16 branch glyph, then its name) with its chats one lane in, at 96, the
+  project's line running on beside them. Every checkout is open by
+  default; a tap on the project's or a worktree's row (or TalkBack's
+  expand and collapse) folds its chats away after a light tick, a chevron
+  saying which, and the project's row folds only its own checkout. The
+  folded ones are kept on the phone (`LocalSettingsValues.collapsedCheckouts`
+  by `worktreePlaceId`, beside `expandedProjects`' Show all). A folded row
+  speaks for its chats (shimmer, dot) and is the selected row on a tablet
+  while one of them is open; an open one shows only its line counts. A
+  chat's row opens it, long-presses to its menu and swipes to archive as a
+  flat row does, the action's glyph without its words in 48. The tabs in
+  the chat stay.
 - **First screen** (`ui/start`), a splash shown only while the phone has
   no Happy account and no agent connection; never again once one is
   added. Deliberately not iOS's:

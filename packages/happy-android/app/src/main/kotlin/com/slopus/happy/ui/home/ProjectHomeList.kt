@@ -49,6 +49,7 @@ import com.slopus.happy.model.SessionRowData
 import com.slopus.happy.model.VisibleGitChanges
 import com.slopus.happy.model.WorkspaceOrigin
 import com.slopus.happy.model.WorktreeToggle
+import com.slopus.happy.model.activity
 import com.slopus.happy.model.compactCount
 import com.slopus.happy.model.projectGitChanges
 import com.slopus.happy.model.resolveFlatRowPresentation
@@ -76,6 +77,9 @@ object ProjectListTags {
     const val CHAT = "projectList.chat"
     const val TREE_STEM = "projectList.treeStem"
     const val TREE_TRUNK = "projectList.treeTrunk"
+    const val CHECKOUT_CHAT = "projectList.checkoutChat"
+    const val CHEVRON = "projectList.chevron"
+    const val WORKTREE_ICON = "projectList.worktreeIcon"
 }
 
 /** ProjectHomeList.tsx */
@@ -92,6 +96,10 @@ object ProjectListSpec {
     val chatDot = 10.dp
     val addButtonWidth = 28.dp
     val addButtonHeight = 32.dp
+    val chevron = 14.dp
+    /** A worktree's branch glyph, where its name would start; its chats' line drops from its middle. */
+    val worktreeIcon = 16.dp
+    val worktreeIconGap = 6.dp
     val section = happyTextStyle(fontSize = 11, lineHeight = 14, letterSpacing = 0.6f, weight = FontWeight.SemiBold)
     val machine = happyTextStyle(fontSize = 11, lineHeight = 14)
     val projectName = happyTextStyle(fontSize = 17, lineHeight = 22)
@@ -117,17 +125,21 @@ private fun treeLine(): Dp = with(LocalDensity.current) { 2f.toDp() }
 
 /**
  * One row of the project hierarchy: under each computer its bots and
- * projects; a project card (28 avatar, 52 high) with its worktrees hanging
- * off a tree line (48 high), then the toggle that shows them all or fewer;
- * the archive tail drawn the way the flat list draws it.
+ * projects; a project card (28 avatar, 52 high) with its own chats, then
+ * its worktrees, hanging off a tree line (48 high each), each worktree's
+ * chats one lane further in (names at 96), then the toggle that shows the
+ * worktrees all or fewer; the archive tail drawn the way the flat list
+ * draws it. A tap on a project's or a worktree's row folds its chats away
+ * or lists them again (Android's own; iOS opens the newest chat).
  *
  * [carded], in home's inset cards (iOS at a71eea391): a section's heading
  * is only the gap between two cards; a computer's heading stands over its
  * cards in line with their avatars, with no rule; a project's row loses the
- * room above it; the card draws the hairlines.
+ * room above it; the card draws the hairlines. [selected]: the row's card
+ * ground is the selected one, which a chat's swipe keeps under it.
  */
 @Composable
-fun ProjectHomeRowContent(row: ProjectHomeRow, callbacks: HomeListCallbacks, carded: Boolean = false) {
+fun ProjectHomeRowContent(row: ProjectHomeRow, callbacks: HomeListCallbacks, carded: Boolean = false, selected: Boolean = false) {
     when (row) {
         is ProjectHomeRow.Section -> if (carded) {
             Spacer(Modifier.fillMaxWidth().height(HomeCardSpec.gap).testTag(ProjectListTags.SECTION))
@@ -145,8 +157,9 @@ fun ProjectHomeRowContent(row: ProjectHomeRow, callbacks: HomeListCallbacks, car
         is ProjectHomeRow.MachineHeader -> MachineHeaderRow(row.machineId, row.machineName, callbacks, carded)
         is ProjectHomeRow.Bot -> ChatRow(row.session, bot = true, archived = false, callbacks)
         is ProjectHomeRow.Task -> ChatRow(row.session, bot = false, archived = false, callbacks)
-        is ProjectHomeRow.ProjectCard -> ProjectCardRow(row.project, callbacks, carded)
-        is ProjectHomeRow.Worktree -> WorktreeRow(row.worktree, row.last, callbacks)
+        is ProjectHomeRow.ProjectCard -> ProjectCardRow(row.project, row.collapsed, callbacks, carded)
+        is ProjectHomeRow.Worktree -> WorktreeRow(row.worktree, row.last, row.collapsed, callbacks)
+        is ProjectHomeRow.Chat -> CheckoutChatRow(row, callbacks, carded, selected)
         is ProjectHomeRow.Toggle -> WorktreeToggleRow(row.toggle, callbacks)
         is ProjectHomeRow.ArchiveToggle -> ArchiveToggleRow(row.hidden, banded = false, callbacks)
         is ProjectHomeRow.ArchiveHeader -> SectionRow(dayTitleText(row.title))
@@ -251,31 +264,36 @@ private fun ProjectGitChanges(session: SessionRowData?) {
 }
 
 /**
- * A project's card: it goes by the project's name and opens the project's
- * own checkout. The trailing `+` (and a long press) creates a workspace in
- * it; a stem drops from the avatar to the first worktree.
+ * A project's card: it goes by the project's name and heads the project's
+ * own checkout, whose chats a tap folds away or lists again (a light tick,
+ * then the list changes; a chevron says which). Folded, it speaks for them:
+ * the name shimmers while one works, and the dot shows one waiting or
+ * unread; open, they speak for themselves. The trailing `+` (and a long
+ * press) creates a workspace in it; a stem drops from the avatar to the
+ * first row under it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ProjectCardRow(project: ProjectHomeEntry, callbacks: HomeListCallbacks, carded: Boolean) {
+private fun ProjectCardRow(project: ProjectHomeEntry, collapsed: Boolean, callbacks: HomeListCallbacks, carded: Boolean) {
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(project.id) } }
     val colors = HappyTheme.colors
-    val session = project.session
-    val origin: WorkspaceOrigin? = (session ?: project.avatarSession)?.let(::workspaceOrigin)
+    val checkoutId = project.checkoutId
+    val origin: WorkspaceOrigin? = (project.session ?: project.avatarSession)?.let(::workspaceOrigin)
     val stem = treeLine()
+    val flip = checkoutFlip(checkoutId, callbacks)
     Row(
         modifier = Modifier
             .padding(top = if (carded) 0.dp else ProjectListSpec.projectRowTop)
             .fillMaxWidth()
             .height(ProjectListSpec.projectRow)
             .testTag(ProjectListTags.PROJECT)
-            .sessionPressDown(session?.id, callbacks)
             .combinedClickable(
-                enabled = session != null || origin != null,
+                enabled = flip != null || origin != null,
                 role = Role.Button,
-                onClick = { session?.let { callbacks.onOpen(it.id) } },
+                onClick = { flip?.invoke() },
                 onLongClick = origin?.let { { callbacks.onProjectMenu(project.name, it) } },
             )
+            .then(if (flip != null) Modifier.foldSemantics(collapsed, flip) else Modifier)
             .padding(horizontal = ProjectListSpec.rowPaddingX),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -283,7 +301,7 @@ private fun ProjectCardRow(project: ProjectHomeEntry, callbacks: HomeListCallbac
             project.avatarSession?.let {
                 Avatar(id = it.avatarId, size = ProjectListSpec.avatar, imageUri = it.projectAvatarUri, thumbhash = it.projectAvatarThumbhash)
             }
-            if (project.worktreeCount > 0) {
+            if (project.worktreeCount > 0 || (checkoutId != null && !collapsed)) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -294,14 +312,14 @@ private fun ProjectCardRow(project: ProjectHomeEntry, callbacks: HomeListCallbac
                 )
             }
         }
-        RowName(project.name, project.working, ProjectListSpec.projectName)
+        RowName(project.name, collapsed && project.working, ProjectListSpec.projectName)
         Row(
             modifier = Modifier.padding(start = ProjectListSpec.trailingGap),
             horizontalArrangement = Arrangement.spacedBy(ProjectListSpec.trailingGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AttentionDot(project.blocked, project.unread)
-            ProjectGitChanges(session)
+            if (collapsed) AttentionDot(project.blocked, project.unread)
+            ProjectGitChanges(project.session)
             if (origin != null) {
                 Box(
                     modifier = Modifier
@@ -313,18 +331,51 @@ private fun ProjectCardRow(project: ProjectHomeEntry, callbacks: HomeListCallbac
                     Icon(Ionicon.Add, size = 18.dp, color = colors.textSecondary, contentDescription = stringResource(R.string.home_create_workspace_in, project.name))
                 }
             }
+            if (checkoutId != null) FoldChevron(collapsed)
         }
     }
 }
 
-/** The tree for a row under a card: the trunk down the avatar lane (stopping at the elbow on the last), the elbow to the name. */
+/** A checkout's fold: a light tick, then its chats go or come back (ProjectHomeList.tsx's toggle). Null without a checkout. */
 @Composable
-private fun BoxScope.TreeBranch(last: Boolean) {
+private fun checkoutFlip(checkoutId: String?, callbacks: HomeListCallbacks): (() -> Unit)? {
+    val haptics = LocalHapticFeedback.current
+    if (checkoutId == null) return null
+    return {
+        haptics.light()
+        callbacks.onToggleCheckout(checkoutId)
+    }
+}
+
+/** accessibilityState={{ expanded }}: TalkBack's expand or collapse does what a tap does. */
+private fun Modifier.foldSemantics(collapsed: Boolean, flip: () -> Unit): Modifier = semantics {
+    if (collapsed) expand { flip(); true } else collapse { flip(); true }
+}
+
+/** Points down at a checkout's listed chats, or on at folded ones. */
+@Composable
+private fun FoldChevron(collapsed: Boolean) {
+    Icon(
+        if (collapsed) Ionicon.ChevronForward else Ionicon.ChevronDown,
+        size = ProjectListSpec.chevron,
+        color = HappyTheme.colors.textSecondary,
+        modifier = Modifier.testTag(ProjectListTags.CHEVRON),
+    )
+}
+
+/**
+ * The tree for a row under a card: the trunk down its lane [center] from
+ * the lane's start (stopping at the elbow on the [last]), the elbow from it
+ * to the lane's end, 12 before the name.
+ */
+@Composable
+private fun BoxScope.TreeBranch(last: Boolean, center: Dp = ProjectListSpec.avatar / 2) {
     val colors = HappyTheme.colors
     val line = treeLine()
     Box(
         modifier = Modifier
-            .align(Alignment.TopCenter)
+            .align(Alignment.TopStart)
+            .offset(x = center - line / 2)
             .testTag(ProjectListTags.TREE_TRUNK)
             .width(line)
             .then(if (last) Modifier.height(ProjectListSpec.worktreeRow / 2) else Modifier.fillMaxHeight())
@@ -333,36 +384,124 @@ private fun BoxScope.TreeBranch(last: Boolean) {
     Box(
         modifier = Modifier
             .align(Alignment.CenterStart)
-            .offset(x = ProjectListSpec.avatar / 2)
-            .width(ProjectListSpec.avatar / 2)
+            .offset(x = center)
+            .width(ProjectListSpec.avatar - center)
             .height(line)
             .background(colors.textSecondary),
     )
 }
 
-/** One worktree, hanging off its project's tree line; opens the chat worked on most recently. */
+/** A project's line running on through a row that doesn't hang on it, down the middle of the avatar lane. */
 @Composable
-private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, callbacks: HomeListCallbacks) {
+private fun BoxScope.TreeTrunk() {
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .testTag(ProjectListTags.TREE_TRUNK)
+            .width(treeLine())
+            .fillMaxHeight()
+            .background(HappyTheme.colors.textSecondary),
+    )
+}
+
+/**
+ * One worktree, hanging off its project's tree line: a branch glyph, then
+ * its name. A tap folds its chats away or lists them again, as a project's
+ * row does, and folded it speaks for them; open, their line drops from the
+ * glyph's middle.
+ */
+@Composable
+private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boolean, callbacks: HomeListCallbacks) {
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(worktree.id) } }
+    val colors = HappyTheme.colors
+    val flip = checkoutFlip(worktree.id, callbacks)!!
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(ProjectListSpec.worktreeRow)
             .testTag(ProjectListTags.WORKTREE)
-            .sessionPressDown(worktree.session.id, callbacks)
-            .clickable(role = Role.Button) { callbacks.onOpen(worktree.session.id) }
+            .clickable(role = Role.Button, onClick = flip)
+            .foldSemantics(collapsed, flip)
             .padding(horizontal = ProjectListSpec.rowPaddingX),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AvatarLane { TreeBranch(last) }
-        RowName(worktree.workspaceName ?: worktree.projectName, worktree.working, ProjectListSpec.worktreeName)
+        Box(
+            modifier = Modifier.padding(end = ProjectListSpec.worktreeIconGap).width(ProjectListSpec.worktreeIcon).fillMaxHeight(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Ionicon.GitBranchOutline, size = ProjectListSpec.worktreeIcon, color = colors.textSecondary, modifier = Modifier.testTag(ProjectListTags.WORKTREE_ICON))
+            if (!collapsed) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .testTag(ProjectListTags.TREE_STEM)
+                        .width(treeLine())
+                        .height((ProjectListSpec.worktreeRow - ProjectListSpec.worktreeIcon) / 2)
+                        .background(colors.textSecondary),
+                )
+            }
+        }
+        RowName(worktree.workspaceName ?: worktree.projectName, collapsed && worktree.working, ProjectListSpec.worktreeName)
         Row(
             modifier = Modifier.padding(start = ProjectListSpec.trailingGap),
             horizontalArrangement = Arrangement.spacedBy(ProjectListSpec.trailingGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AttentionDot(worktree.blocked, worktree.unread)
+            if (collapsed) AttentionDot(worktree.blocked, worktree.unread)
             ProjectGitChanges(worktree.session)
+            FoldChevron(collapsed)
+        }
+    }
+}
+
+/**
+ * A chat of an open checkout, by its own name ("New chat" without one), on
+ * its tree line: under its project at 56, or under its worktree at 96 with
+ * the project's line running on beside it. It shimmers while it works and
+ * shows the 7 dot while it waits or is unread. A tap opens it, a long press
+ * its menu, a swipe archives it, as a flat row's do (the action's glyph
+ * without its words, which a 48 row can't hold at large text).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CheckoutChatRow(row: ProjectHomeRow.Chat, callbacks: HomeListCallbacks, carded: Boolean, selected: Boolean) {
+    val session = row.session
+    LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(session.id) } }
+    val colors = HappyTheme.colors
+    val now = activity(listOf(session))
+    val ground = when {
+        selected -> colors.surfaceSelected
+        carded -> colors.surfaceHigh
+        else -> colors.grouped.background
+    }
+    // 48 high: the action's glyph alone, so it never cuts its words at large text.
+    SwipeToArchive(enabled = true, onArchive = { callbacks.onArchive(session.id) }, labelled = false) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(ProjectListSpec.worktreeRow)
+                .testTag(ProjectListTags.CHECKOUT_CHAT)
+                .background(ground)
+                .sessionPressDown(session.id, callbacks)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = { callbacks.onOpen(session.id) },
+                    onLongClick = { callbacks.onMenu(session.id) },
+                )
+                .padding(horizontal = ProjectListSpec.rowPaddingX),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (row.nested) {
+                AvatarLane { if (row.throughTrunk) TreeTrunk() }
+                AvatarLane { TreeBranch(row.last, center = ProjectListSpec.worktreeIcon / 2) }
+            } else {
+                AvatarLane { TreeBranch(row.last) }
+            }
+            RowName(session.name ?: stringResource(R.string.session_new_chat), now.working, ProjectListSpec.worktreeName)
+            Box(modifier = Modifier.padding(start = ProjectListSpec.trailingGap)) {
+                AttentionDot(now.blocked, now.unread)
+            }
         }
     }
 }
