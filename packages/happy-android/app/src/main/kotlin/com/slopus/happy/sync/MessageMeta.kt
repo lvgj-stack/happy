@@ -81,8 +81,10 @@ object MessageMetaResolver {
 
         // Codex and Agy always run with a concrete permission, model and effort:
         // send what the composer shows rather than leaving the agent to guess.
+        // Codex config (`default`) goes out as model: null, and with no effort
+        // picked as effort: null, so Codex runs what its config.toml says.
         if (flavor == "codex" || flavor == "agy") {
-            val defaults = AgentDefaults.resolve(overrides, flavor, cliVersion)
+            val defaults = AgentDefaults.resolve(overrides, flavor, cliVersion, mirror.modelMode)
             val modelMode = mirror.modelMode ?: defaults.modelMode
             return MessageModeMeta(
                 permissionMode = supported(AgentDefaults.retirePermissionMode(mirror.permissionMode ?: defaults.permissionMode)),

@@ -191,13 +191,16 @@ fun AgentsScreen(
             for (agent in configurableAgents) {
                 val code = AgentDefaults.codeDefaults(agent.wire, cliVersion)
                 val effective = AgentDefaults.resolve(overrides, agent.wire, cliVersion)
+                // OpenClaw's lone `default` model is no choice; Codex's is Codex config.
                 val models = ModeOptions.includeConfiguredModel(agent.wire, ModeOptions.modelModes(agent.wire), effective.modelMode)
-                    .filter { it.key != "default" }
+                    .filter { it.key != "default" || agent == AgentKey.Codex }
                 val efforts = ModeOptions.effortLevelsForModel(agent.wire, effective.modelMode)
+                // On Codex config "Use code default" means config.toml's effort, not the code's.
+                val codeEffort = if (AgentDefaults.followsCodexConfig(agent.wire, effective.modelMode)) null else code.effortLevel
                 val fields = buildList {
                     add(FieldConfig(AgentDefaultField.PermissionMode, stringResource(R.string.settings_agents_permission), Ionicon.ShieldCheckmarkOutline, ModeOptions.permissionModes(agent.wire, resources::getString), code.permissionMode))
                     if (models.isNotEmpty()) add(FieldConfig(AgentDefaultField.ModelMode, stringResource(R.string.settings_agents_model), Ionicon.HardwareChipOutline, models, code.modelMode))
-                    if (efforts.isNotEmpty()) add(FieldConfig(AgentDefaultField.EffortLevel, stringResource(R.string.settings_agents_effort), Ionicon.SpeedometerOutline, efforts, code.effortLevel))
+                    if (efforts.isNotEmpty()) add(FieldConfig(AgentDefaultField.EffortLevel, stringResource(R.string.settings_agents_effort), Ionicon.SpeedometerOutline, efforts, codeEffort))
                 }
                 ItemGroup(title = AgentType.harnessName(agent.wire)) {
                     Column {

@@ -108,9 +108,24 @@ class ComposerModesTest {
     fun codexMetadataModelsGetADefaultRow() {
         val metadata = plain("codex") { put("models", Json.parseToJsonElement("""[{"code":"m1","value":"Model one"}]""")) }
         assertEquals(listOf("default", "m1"), ModeOptions.availableModels("codex", metadata, translate).map { it.key })
+        assertEquals("Codex config", ModeOptions.availableModels("codex", metadata, translate)[0].name)
         // No published models: the hardcoded list keeps a custom pick.
         val hardcoded = ModeOptions.availableModels("codex", plain("codex"), translate, selectedKey = "my-model")
         assertEquals("my-model", hardcoded.last().key)
+    }
+
+    @Test
+    fun codexConfigShowsNoEffortUnlessOnePicked() {
+        val followed = ComposerModeResolver.resolve(plain("codex"), ComposerMirror(modelMode = "default"), null, translate)
+        assertEquals("default", followed.modelMode?.key)
+        assertNull(followed.effortLevel)
+        assertEquals(listOf("low", "medium", "high", "xhigh"), followed.availableEffortLevels.map { it.key })
+
+        val picked = ComposerModeResolver.resolve(plain("codex"), ComposerMirror(modelMode = "default", effortLevel = "high"), null, translate)
+        assertEquals("high", picked.effortLevel?.key)
+
+        // Any other model keeps the code default effort.
+        assertEquals("medium", ComposerModeResolver.resolve(plain("codex"), ComposerMirror(), null, translate).effortLevel?.key)
     }
 
     @Test

@@ -98,6 +98,16 @@ object AgentDefaults {
         AgentKey.Agy to AgentDefaultConfig("default", "Gemini 3.8 Flash", "medium"),
     )
 
+    /**
+     * Codex's model row that sends `model: null`: Happy CLI then leaves the
+     * model out of `thread/start`, so Codex runs the one (and the provider)
+     * in its own ~/.codex/config.toml instead of happy-cli's built-in GPT default.
+     */
+    const val CODEX_CONFIG_MODEL = "default"
+
+    /** Codex on [CODEX_CONFIG_MODEL]: its effort is Codex's own too, unless the user picked one. */
+    fun followsCodexConfig(flavor: String?, modelMode: String?): Boolean = flavor == "codex" && modelMode == CODEX_CONFIG_MODEL
+
     /** `auto` first shipped in happy-cli 1.2.1-beta.2, for Claude and Codex alike. */
     const val CLI_VERSION_WITH_AUTO = "1.2.1-beta.2"
 
@@ -157,14 +167,20 @@ object AgentDefaults {
         )
     }
 
-    /** resolveAgentDefaultConfig: the user's override over the code default, field by field. */
-    fun resolve(overrides: AgentDefaultOverrides?, flavor: String?, cliVersion: String? = null): AgentDefaultConfig {
+    /**
+     * resolveAgentDefaultConfig: the user's override over the code default,
+     * field by field. [modelMode] is the session's own model pick, when it
+     * has one: on Codex config ([followsCodexConfig]) the effort falls back
+     * to none rather than the code default, so config.toml's applies.
+     */
+    fun resolve(overrides: AgentDefaultOverrides?, flavor: String?, cliVersion: String? = null, modelMode: String? = null): AgentDefaultConfig {
         val code = codeDefaults(flavor, cliVersion)
         val user = override(overrides, flavor)
+        val model = user.modelMode ?: code.modelMode
         return AgentDefaultConfig(
             permissionMode = user.permissionMode ?: code.permissionMode,
-            modelMode = user.modelMode ?: code.modelMode,
-            effortLevel = user.effortLevel ?: code.effortLevel,
+            modelMode = model,
+            effortLevel = if (followsCodexConfig(flavor, modelMode ?: model)) user.effortLevel else user.effortLevel ?: code.effortLevel,
         )
     }
 

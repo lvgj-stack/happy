@@ -98,7 +98,11 @@ object ModeOptions {
     /** Claude models that left the list but can still be saved. */
     private val unlistedClaudeModelNames = mapOf("claude-sonnet-5" to "Sonnet 5")
 
+    /** [AgentDefaults.CODEX_CONFIG_MODEL]: sends no model, so Codex runs its own config.toml's. Leads every Codex list. */
+    private val codexConfigModel = ModeOption(AgentDefaults.CODEX_CONFIG_MODEL, "Codex config", "model and effort from ~/.codex/config.toml")
+
     private val codexModelModes = listOf(
+        codexConfigModel,
         ModeOption("gpt-6-astra", "GPT-6 Astra", "most capable"),
         ModeOption("gpt-6.1-sol", "GPT-6.1 Sol"),
         ModeOption("gpt-6-sol", "GPT-6 Sol"),
@@ -334,7 +338,7 @@ object ModeOptions {
         }
         val published = metadataModels(metadata?.models)
         if (published.isNotEmpty()) {
-            if (flavor == "codex" && published.none { it.key == "default" }) return listOf(ModeOption("default", "default model")) + published
+            if (flavor == "codex" && published.none { it.key == AgentDefaults.CODEX_CONFIG_MODEL }) return listOf(codexConfigModel) + published
             return published
         }
         return includeConfiguredModel(flavor, modelModes(flavor), selectedKey)

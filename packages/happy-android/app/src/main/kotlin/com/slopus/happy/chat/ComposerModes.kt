@@ -63,8 +63,8 @@ object ComposerModeResolver {
     ): ComposerModes {
         val flavor = metadata?.flavor
         val rig = metadata.isRig()
-        val defaults = AgentDefaults.resolve(overrides, flavor, metadata?.version)
         val sessionModel = if (rig) mirror.modelMode else AgentDefaults.retireModelMode(flavor, mirror.modelMode)
+        val defaults = AgentDefaults.resolve(overrides, flavor, metadata?.version, if (rig) null else sessionModel)
         val models = ModeOptions.availableModels(flavor, metadata, translate, sessionModel ?: if (rig) null else defaults.modelMode)
         val modes = ModeOptions.availablePermissionModes(flavor, metadata, translate, mirror.permissionMode)
         val permission = ModeOptions.resolveCurrentOption(

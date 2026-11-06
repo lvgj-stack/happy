@@ -46,10 +46,12 @@ class ModeOptionsTest {
         )
         assertEquals("1M context", ModeOptions.modelModes("claude")[0].description)
         assertEquals(
-            listOf("gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
+            listOf("default", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
             ModeOptions.modelModes("codex").map { it.key },
         )
-        assertEquals("most capable", ModeOptions.modelModes("codex")[0].description)
+        // `default` sends no model, so Codex runs the one in its own config.toml.
+        assertEquals(ModeOption("default", "Codex config", "model and effort from ~/.codex/config.toml"), ModeOptions.modelModes("codex")[0])
+        assertEquals("most capable", ModeOptions.modelModes("codex")[1].description)
         assertEquals(6, ModeOptions.modelModes("gemini").size)
         assertEquals(listOf("default"), ModeOptions.modelModes("openclaw").map { it.key })
         assertEquals("Gemini 3.8 Flash", ModeOptions.modelModes("agy")[0].name)

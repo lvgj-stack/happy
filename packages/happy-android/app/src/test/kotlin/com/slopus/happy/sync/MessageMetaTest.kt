@@ -152,6 +152,29 @@ class MessageMetaTest {
     }
 
     @Test
+    fun codexConfigSendsNoModelAndNoEffortUnlessOneIsPicked() {
+        // model: null and effort: null make Happy CLI leave both to Codex's own config.toml.
+        assertEquals(
+            MessageModeMeta(permissionMode = "auto", model = Present(null), effort = Present(null)),
+            mode(metadata("codex"), modelMode = "default"),
+        )
+        assertEquals(
+            MessageModeMeta(permissionMode = "auto", model = Present(null), effort = Present(null)),
+            mode(metadata("codex"), overrides = overrides("""{"codex":{"modelMode":"default"}}""")),
+        )
+        assertEquals(
+            MessageModeMeta(permissionMode = "auto", model = Present(null), effort = Present("high")),
+            mode(metadata("codex"), modelMode = "default", effortLevel = "high"),
+        )
+        assertEquals(
+            MessageModeMeta(permissionMode = "auto", model = Present(null), effort = Present("xhigh")),
+            mode(metadata("codex"), modelMode = "default", overrides = overrides("""{"codex":{"effortLevel":"xhigh"}}""")),
+        )
+        // A session pick of a real model over a settings default of Codex config sends that model at the code effort.
+        assertEquals(meta("auto", "gpt-6-sol", "medium"), mode(metadata("codex"), modelMode = "gpt-6-sol", overrides = overrides("""{"codex":{"modelMode":"default"}}""")))
+    }
+
+    @Test
     fun aCustomCodexModelPassesThrough() {
         assertEquals(meta("auto", "my-workspace-model", "medium"), mode(metadata("codex"), modelMode = "my-workspace-model"))
         assertEquals(meta("auto", "my-workspace-model", "medium"), mode(metadata("codex"), overrides = overrides("""{"codex":{"modelMode":"my-workspace-model"}}""")))

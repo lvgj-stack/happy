@@ -16,6 +16,21 @@ class AgentDefaultsTest {
     }
 
     @Test
+    fun codexConfigTakesCodexsOwnEffortUnlessTheUserPickedOne() {
+        assertEquals("medium", AgentDefaults.resolve(null, "codex").effortLevel)
+        assertEquals(null, AgentDefaults.resolve(null, "codex", modelMode = "default").effortLevel)
+        val asDefault = overrides(AgentKey.Codex to AgentDefaultOverride(modelMode = "default"))
+        assertEquals(AgentDefaultConfig("auto", "default", null), AgentDefaults.resolve(asDefault, "codex"))
+        val withEffort = overrides(AgentKey.Codex to AgentDefaultOverride(modelMode = "default", effortLevel = "high"))
+        assertEquals("high", AgentDefaults.resolve(withEffort, "codex").effortLevel)
+        // A session's own model wins over the default either way.
+        assertEquals("medium", AgentDefaults.resolve(asDefault, "codex", modelMode = "gpt-6-sol").effortLevel)
+        // OpenClaw's only model is also `default`; it has no effort to drop.
+        assertEquals(null, AgentDefaults.resolve(null, "openclaw").effortLevel)
+        assertEquals("medium", AgentDefaults.resolve(null, "claude", modelMode = "default").effortLevel)
+    }
+
+    @Test
     fun oldClisFallBackToDefault() {
         for (flavor in listOf("claude", "codex")) {
             assertEquals("default", AgentDefaults.codeDefaults(flavor, "1.2.0").permissionMode)
