@@ -79,6 +79,8 @@ object ProjectListTags {
     const val TREE_TRUNK = "projectList.treeTrunk"
     const val CHECKOUT_CHAT = "projectList.checkoutChat"
     const val CHEVRON = "projectList.chevron"
+    const val MACHINE_CHEVRON = "projectList.machineChevron"
+    const val MACHINE_NAME = "projectList.machineName"
     const val WORKTREE_ICON = "projectList.worktreeIcon"
 }
 
@@ -154,7 +156,7 @@ fun ProjectHomeRowContent(row: ProjectHomeRow, callbacks: HomeListCallbacks, car
                 ),
             )
         }
-        is ProjectHomeRow.MachineHeader -> MachineHeaderRow(row.machineId, row.machineName, callbacks, carded)
+        is ProjectHomeRow.MachineHeader -> MachineHeaderRow(row, callbacks, carded)
         is ProjectHomeRow.Bot -> ChatRow(row.session, bot = true, archived = false, callbacks)
         is ProjectHomeRow.Task -> ChatRow(row.session, bot = false, archived = false, callbacks)
         is ProjectHomeRow.ProjectCard -> ProjectCardRow(row.project, row.collapsed, callbacks, carded)
@@ -179,16 +181,38 @@ private fun SectionRow(label: String) {
     }
 }
 
-/** The computer everything below runs on: desktop glyph (12), its name (11), a line to the edge (none over cards). */
+/**
+ * The computer everything below runs on: desktop glyph (12), its name (11), a line to the edge (none over cards).
+ * Its glyph and name open the computer. Once there is more than one computer ([ProjectHomeRow.MachineHeader.foldable])
+ * the rest of the heading folds its bots, tasks and projects away after a light tick, or lists them again
+ * (Android's own), a chevron at its end saying which; folded, a dot speaks for a chat waiting or unread.
+ */
 @Composable
-private fun MachineHeaderRow(machineId: String?, machineName: String, callbacks: HomeListCallbacks, carded: Boolean) {
+private fun MachineHeaderRow(header: ProjectHomeRow.MachineHeader, callbacks: HomeListCallbacks, carded: Boolean) {
     val colors = HappyTheme.colors
-    val name = if (machineId == null) "<${stringResource(R.string.status_unknown)}>" else machineName
+    val machineId = header.machineId
+    val name = if (machineId == null) "<${stringResource(R.string.status_unknown)}>" else header.machineName
+    val haptics = LocalHapticFeedback.current
+    val flip: (() -> Unit)? = if (header.foldable) {
+        {
+            haptics.light()
+            callbacks.onToggleMachine(header.foldId)
+        }
+    } else {
+        null
+    }
+    val open: (() -> Unit)? = machineId?.let { id -> { callbacks.onOpenMachine(id) } }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(ProjectListTags.MACHINE)
-            .then(if (machineId != null) Modifier.clickable(role = Role.Button) { callbacks.onOpenMachine(machineId) } else Modifier)
+            .then(
+                when {
+                    flip != null -> Modifier.clickable(role = Role.Button, onClick = flip).foldSemantics(header.collapsed, flip)
+                    open != null -> Modifier.clickable(role = Role.Button, onClick = open)
+                    else -> Modifier
+                },
+            )
             .then(
                 if (carded) {
                     Modifier
@@ -206,16 +230,30 @@ private fun MachineHeaderRow(machineId: String?, machineName: String, callbacks:
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(Ionicon.DesktopOutline, size = 12.dp, color = colors.textSecondary)
-        Text(
-            text = name,
-            style = ProjectListSpec.machine,
-            color = colors.textSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = if (carded) Modifier.weight(1f, fill = false) else Modifier.widthIn(max = 220.dp),
-        )
-        if (!carded) Box(Modifier.weight(1f).height(treeLine()).background(colors.textSecondary))
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Folding takes the heading's taps; its glyph and name still open the computer.
+            Row(
+                modifier = Modifier
+                    .testTag(ProjectListTags.MACHINE_NAME)
+                    .then(if (flip != null && open != null) Modifier.clickable(role = Role.Button, onClick = open) else Modifier)
+                    .then(if (carded) Modifier.weight(1f, fill = false) else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(Ionicon.DesktopOutline, size = 12.dp, color = colors.textSecondary)
+                Text(
+                    text = name,
+                    style = ProjectListSpec.machine,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (carded) Modifier.weight(1f, fill = false) else Modifier.widthIn(max = 220.dp),
+                )
+            }
+            if (!carded) Box(Modifier.weight(1f).height(treeLine()).background(colors.textSecondary))
+        }
+        if (header.collapsed) AttentionDot(header.blocked, header.unread)
+        if (flip != null) FoldChevron(header.collapsed, ProjectListTags.MACHINE_CHEVRON)
     }
 }
 
@@ -354,12 +392,12 @@ private fun Modifier.foldSemantics(collapsed: Boolean, flip: () -> Unit): Modifi
 
 /** Points down at a checkout's listed chats, or on at folded ones. */
 @Composable
-private fun FoldChevron(collapsed: Boolean) {
+private fun FoldChevron(collapsed: Boolean, tag: String = ProjectListTags.CHEVRON) {
     Icon(
         if (collapsed) Ionicon.ChevronForward else Ionicon.ChevronDown,
         size = ProjectListSpec.chevron,
         color = HappyTheme.colors.textSecondary,
-        modifier = Modifier.testTag(ProjectListTags.CHEVRON),
+        modifier = Modifier.testTag(tag),
     )
 }
 

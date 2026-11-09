@@ -70,9 +70,26 @@ sealed interface ProjectHomeRow {
         override val key get() = "section-$id"
     }
 
-    /** The computer everything below it runs on, drawn even for a single machine. */
-    data class MachineHeader(val machineId: String?, val machineName: String) : ProjectHomeRow {
-        override val key get() = "machine-${machineId ?: "unknown"}"
+    /**
+     * The computer everything below it runs on, drawn even for a single machine.
+     * [foldable] while the account has more than one computer (the phone heads
+     * its cards with it only then); [collapsed]: its bots, tasks and projects
+     * are folded away under it, [sessionIds] theirs, and the heading speaks for
+     * them ([unread], [blocked]).
+     */
+    data class MachineHeader(
+        val machineId: String?,
+        val machineName: String,
+        val foldable: Boolean = false,
+        val collapsed: Boolean = false,
+        val unread: Boolean = false,
+        val blocked: Boolean = false,
+        val sessionIds: Set<String> = emptySet(),
+    ) : ProjectHomeRow {
+        override val key get() = "machine-$foldId"
+
+        /** What [LocalSettingsValues.collapsedMachines] keys it by. */
+        val foldId: String get() = machineFoldId(machineId)
     }
 
     data class Bot(val session: SessionRowData) : ProjectHomeRow {
@@ -125,6 +142,9 @@ sealed interface ProjectHomeRow {
 const val WORKTREE_PREVIEW_COUNT = 3
 
 fun worktreePlaceId(projectId: String, workspaceId: String) = "$projectId\u0000$workspaceId"
+
+/** A computer's fold key: its id, or `unknown` for the chats that name none. */
+fun machineFoldId(machineId: String?) = machineId ?: "unknown"
 
 /** Where a new workspace for a project would be created, read off one of its chats. */
 data class WorkspaceOrigin(val machineId: String, val projectId: String?, val path: String?)
@@ -231,6 +251,8 @@ private class MachineSection(val machineId: String?, val machineName: String, va
     val bots = mutableListOf<SessionRowData>()
     val tasks = mutableListOf<SessionRowData>()
     val projects = mutableListOf<ProjectHomeRow>()
+    /** Every chat under it, bots', tasks' and projects', for its heading to speak for when folded. */
+    val sessions = mutableListOf<SessionRowData>()
     var lastActivityAt = 0L
 }
 
@@ -253,6 +275,9 @@ private fun projectsByMachine(items: List<SessionListItem>, machineName: (String
  * no computer go last. The archive trails behind its toggle as the flat,
  * date-grouped tail. Every checkout lists its chats unless its id
  * ([worktreePlaceId]) is in [collapsed] (Android's own; iOS lists a checkout's chats only as its tabs).
+ * A computer's heading folds away everything under it while its [machineFoldId] is in
+ * [collapsedMachines] (Android's own), as long as there is more than one computer to tell
+ * apart: [linkedComputers] of the account's, or more than one heading drawn.
  */
 fun buildProjectHomeRows(
     items: List<SessionListItem>,
@@ -262,6 +287,8 @@ fun buildProjectHomeRows(
     hasArchivedSessions: Boolean = false,
     archiveHidden: Boolean = true,
     collapsed: Set<String> = emptySet(),
+    collapsedMachines: Set<String> = emptySet(),
+    linkedComputers: Int = 0,
 ): List<ProjectHomeRow> {
     val collator = Collator.getInstance()
     val sections = LinkedHashMap<String?, MachineSection>()
@@ -285,6 +312,7 @@ fun buildProjectHomeRows(
         for (session in sessions) {
             val section = sectionFor(session.machineId)
             (if (task) section.tasks else section.bots).add(session)
+            section.sessions.add(session)
             section.lastActivityAt = maxOf(section.lastActivityAt, session.lastActivityAt)
         }
     }
@@ -294,6 +322,7 @@ fun buildProjectHomeRows(
             val built = projectRows(project, expanded, collapsed)
             if (built.isEmpty()) continue
             section.projects.addAll(built)
+            project.workspaces.forEach { w -> section.sessions.addAll(w.sessions) }
             project.workspaces.forEach { w -> w.sessions.forEach { section.lastActivityAt = maxOf(section.lastActivityAt, it.lastActivityAt) } }
         }
     }
@@ -304,11 +333,25 @@ fun buildProjectHomeRows(
             .thenByDescending { it.lastActivityAt }
             .thenComparator { a, b -> collator.compare(a.machineName, b.machineName) },
     )
+    val drawn = ordered.filter { it.bots.isNotEmpty() || it.tasks.isNotEmpty() || it.projects.isNotEmpty() }
+    val foldable = linkedComputers > 1 || drawn.size > 1
     val rows = mutableListOf<ProjectHomeRow>()
-    for (section in ordered) {
-        if (section.bots.isEmpty() && section.tasks.isEmpty() && section.projects.isEmpty()) continue
-        val key = section.machineId ?: "unknown"
-        rows.add(ProjectHomeRow.MachineHeader(section.machineId, section.machineName))
+    for (section in drawn) {
+        val key = machineFoldId(section.machineId)
+        val folded = foldable && key in collapsedMachines
+        val a = if (folded) activity(section.sessions) else null
+        rows.add(
+            ProjectHomeRow.MachineHeader(
+                section.machineId,
+                section.machineName,
+                foldable = foldable,
+                collapsed = folded,
+                unread = a?.unread == true,
+                blocked = a?.blocked == true,
+                sessionIds = if (folded) section.sessions.mapTo(HashSet()) { it.id } else emptySet(),
+            ),
+        )
+        if (folded) continue
         if (section.bots.isNotEmpty()) {
             rows.add(ProjectHomeRow.Section("bots:$key", ProjectHomeSection.Bots))
             section.bots.forEach { rows.add(ProjectHomeRow.Bot(it)) }

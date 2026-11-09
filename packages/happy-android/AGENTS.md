@@ -270,6 +270,14 @@ win:
   has no checkout tab strip under its header (`WorktreeTabStrip` is no
   longer placed), and its header names the chat itself, as in the flat
   list.
+  With more than one computer (the phone heads its cards with one only
+  then), a computer's heading folds its bots, tasks and projects away, or
+  lists them again, after a light tick (or TalkBack's expand and collapse),
+  a chevron at its end saying which; its glyph and name still open the
+  computer. The folded ones are kept on the phone
+  (`LocalSettingsValues.collapsedMachines` by `machineFoldId`, `unknown`
+  for chats naming no computer), and a folded heading's dot speaks for a
+  chat waiting or unread under it. A lone computer never folds.
 - **First screen** (`ui/start`), a splash shown only while the phone has
   no Happy account and no agent connection; never again once one is
   added. Deliberately not iOS's:

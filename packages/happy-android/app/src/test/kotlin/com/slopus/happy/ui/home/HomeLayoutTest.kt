@@ -28,6 +28,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.unit.dp
@@ -666,6 +667,73 @@ class HomeLayoutTest {
         val project = rule.onAllNodesWithTag(ProjectListTags.PROJECT, useUnmergedTree = true)[0].bounds
         assertDp("the heading's glyph in line with the cards' avatars", 32, rule.onNodeWithText("Studio", useUnmergedTree = true).bounds.left - 12.dp - 6.dp)
         assertDp("the card 8 under its heading", first.bottom, project.top)
+    }
+
+    // Android's own: with more than one computer, a heading folds its rows away; its name still opens it.
+    @Test
+    fun aComputersHeadingFoldsItsRowsAndItsNameOpensIt() {
+        val toggled = mutableListOf<String>()
+        val machinesOpened = mutableListOf<String>()
+        val ticks = mutableListOf<HapticFeedbackType>()
+        val haptics = object : HapticFeedback {
+            override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+                ticks += hapticFeedbackType
+            }
+        }
+        val header = ProjectHomeRow.MachineHeader("machine-1", "Studio", foldable = true)
+        var row by mutableStateOf(header)
+        rule.setHappyContent {
+            CompositionLocalProvider(LocalHapticFeedback provides haptics) {
+                ProjectHomeRowContent(
+                    row,
+                    HomeListCallbacks(
+                        onOpen = {}, onMenu = {}, onArchive = {}, onSetArchiveHidden = {}, onToggleProject = {},
+                        onOpenMachine = { machinesOpened += it }, onCreateWorkspace = {}, onProjectMenu = { _, _ -> },
+                        onToggleMachine = { toggled += it },
+                    ),
+                    carded = true,
+                )
+            }
+        }
+        rule.node(ProjectListTags.MACHINE_CHEVRON).assertExists()
+        rule.node(ProjectListTags.MACHINE).performTouchInput { click(centerRight) }
+        rule.node(ProjectListTags.MACHINE).performSemanticsAction(SemanticsActions.Collapse)
+        assertEquals(listOf("machine-1", "machine-1"), toggled)
+        assertEquals(listOf(HapticFeedbackType.ContextClick, HapticFeedbackType.ContextClick), ticks)
+        rule.node(ProjectListTags.MACHINE_NAME).performClick()
+        assertEquals(listOf("machine-1"), machinesOpened)
+        assertEquals(2, toggled.size)
+
+        row = header.copy(collapsed = true)
+        rule.waitForIdle()
+        rule.node(ProjectListTags.MACHINE).performSemanticsAction(SemanticsActions.Expand)
+        assertEquals(3, toggled.size)
+
+        // One computer: no chevron, and the heading opens the computer as before.
+        row = ProjectHomeRow.MachineHeader("machine-1", "Studio")
+        rule.waitForIdle()
+        rule.onAllNodesWithTag(ProjectListTags.MACHINE_CHEVRON, useUnmergedTree = true).assertCountEquals(0)
+        rule.node(ProjectListTags.MACHINE).performClick()
+        assertEquals(listOf("machine-1", "machine-1"), machinesOpened)
+    }
+
+    @Test
+    fun aFoldedComputerListsNothingUnderItsHeading() {
+        val rig = machine("machine-1", machineMetadata { put("displayName", "Studio"); put("machineKind", "rig") })
+        val laptop = machine("m2", machineMetadata { put("displayName", "Laptop") })
+        val sessions = listOf(
+            session("own", metadata = rigMetadata(projectId = "p1", projectName = "happy"), lastMessageSentAt = noon),
+            session("cli", metadata = metadata(path = "/Users/dev/site") { put("machineId", "m2") }, active = true, lastMessageSentAt = noon - 1),
+        )
+        val folded = deriveHomeList(
+            HomeListInputs(HomeSnapshot(sessions, listOf(rig, laptop)), SessionListGrouping.Project, true, emptySet(), emptySet(), emptySet(), collapsedMachines = setOf("machine-1")),
+            ZoneOffset.UTC,
+            LocalDate.of(2026, 10, 16),
+        )
+        show(folded)
+        rule.onAllNodesWithTag(ProjectListTags.MACHINE, useUnmergedTree = true).assertCountEquals(2)
+        rule.onAllNodesWithTag(ProjectListTags.PROJECT, useUnmergedTree = true).assertCountEquals(1)
+        rule.onAllNodesWithText("happy", useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

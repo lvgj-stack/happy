@@ -30,6 +30,8 @@ class HomeListCallbacks(
     val onPressDown: (sessionId: String) -> Unit = {},
     /** Grouped by project: fold a checkout's chats away, or list them again. */
     val onToggleCheckout: (checkoutId: String) -> Unit = {},
+    /** Grouped by project: fold a computer's bots, tasks and projects away under its heading, or list them again. */
+    val onToggleMachine: (foldId: String) -> Unit = {},
 )
 
 /**

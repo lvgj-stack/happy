@@ -158,6 +158,8 @@ data class HomeListInputs(
     val archivingSessionIds: Set<String>,
     /** Grouped by project: the checkouts whose chats are folded away. */
     val collapsedCheckouts: Set<String> = emptySet(),
+    /** Grouped by project: the computers whose rows are folded away under their heading. */
+    val collapsedMachines: Set<String> = emptySet(),
 )
 
 /**
@@ -179,7 +181,10 @@ fun deriveHomeList(inputs: HomeListInputs, zone: ZoneId, today: LocalDate): Home
     val online = choices.count { it.online }
     val rows = when (inputs.grouping) {
         SessionListGrouping.Flat -> flatRows(visible, hasArchived, inputs.archiveHidden)
-        SessionListGrouping.Project -> buildProjectHomeRows(visible, machines, "", inputs.expandedProjects, hasArchived, inputs.archiveHidden, collapsed = inputs.collapsedCheckouts)
+        SessionListGrouping.Project -> buildProjectHomeRows(
+            visible, machines, "", inputs.expandedProjects, hasArchived, inputs.archiveHidden,
+            collapsed = inputs.collapsedCheckouts, collapsedMachines = inputs.collapsedMachines, linkedComputers = choices.size,
+        )
             .map(HomeRow::Project)
     }
     return HomeListState(
@@ -188,8 +193,8 @@ fun deriveHomeList(inputs: HomeListInputs, zone: ZoneId, today: LocalDate): Home
         hasArchivedSessions = hasArchived,
         archiveHidden = inputs.archiveHidden,
         rows = rows,
-        // A computer heads its rows only when the account has more than one, or chats on more than one.
-        cards = homeCardEntries(rows, showsMachines = choices.size > 1 || rows.count { (it as? HomeRow.Project)?.row is ProjectHomeRow.MachineHeader } > 1),
+        // A computer heads its rows only when the account has more than one, or chats on more than one: then it folds too.
+        cards = homeCardEntries(rows, showsMachines = rows.any { ((it as? HomeRow.Project)?.row as? ProjectHomeRow.MachineHeader)?.foldable == true }),
         offlineBanner = if (shouldShowOfflineMachinesBanner(choices.size, online)) OfflineBanner(choices.singleOrNull()?.name) else null,
         computers = choices.map { it.name },
         worktrees = if (inputs.grouping == SessionListGrouping.Project) projectWorktreesBySession(all) else emptyMap(),
@@ -237,6 +242,11 @@ fun reuseUnchanged(previous: HomeListState?, next: HomeListState): HomeListState
     )
 }
 
+/** The grouped home's folds, as the local settings keep them. */
+private data class Folds(val expandedProjects: Set<String>, val collapsedCheckouts: Set<String>, val collapsedMachines: Set<String>)
+
+private fun Map<String, Boolean>.trueKeys(): Set<String> = filterValues { it }.keys
+
 /**
  * The home list, derived on [dispatcher] whenever an input changes and
  * diffed against the last one ([reuseUnchanged]). [state] is null until
@@ -255,12 +265,12 @@ class HomeListModel(
     val state: StateFlow<HomeListState?> = combine(
         snapshots.filterNotNull().filter { it.ready },
         settings.map { it.sessionListGrouping to it.hideInactiveSessions }.distinctUntilChanged(),
-        localSettings.map { values -> values.expandedProjects.filterValues { it }.keys to values.collapsedCheckouts.filterValues { it }.keys }
+        localSettings.map { values -> Folds(values.expandedProjects.trueKeys(), values.collapsedCheckouts.trueKeys(), values.collapsedMachines.trueKeys()) }
             .distinctUntilChanged(),
         unreadSessionIds,
         archivingSessionIds,
-    ) { snapshot, (grouping, archiveHidden), (expanded, collapsed), unread, archiving ->
-        HomeListInputs(snapshot, grouping, archiveHidden, expanded, unread, archiving, collapsed)
+    ) { snapshot, (grouping, archiveHidden), folds, unread, archiving ->
+        HomeListInputs(snapshot, grouping, archiveHidden, folds.expandedProjects, unread, archiving, folds.collapsedCheckouts, folds.collapsedMachines)
     }
         .distinctUntilChanged()
         .map { inputs ->

@@ -61,7 +61,9 @@ class ProjectHomeRowsTest {
         hasArchivedSessions: Boolean = false,
         archiveHidden: Boolean = true,
         collapsed: Set<String> = emptySet(),
-    ) = buildProjectHomeRows(data, machines, "unknown", expanded, hasArchivedSessions, archiveHidden, collapsed)
+        collapsedMachines: Set<String> = emptySet(),
+        linkedComputers: Int = 0,
+    ) = buildProjectHomeRows(data, machines, "unknown", expanded, hasArchivedSessions, archiveHidden, collapsed, collapsedMachines, linkedComputers)
 
     /** The rows without the checkouts' chats, which the tests below that are about the chats put back ([chats]). */
     private fun skeleton(rows: List<ProjectHomeRow>) = rows.filterNot { it is ProjectHomeRow.Chat }
@@ -336,6 +338,60 @@ class ProjectHomeRowsTest {
             listOf("machine:Studio", "section:Projects", "project:happy(0)", "machine:<unknown>", "section:Bots", "bot:homeless"),
             shape(rows),
         )
+    }
+
+    // Android's own: a computer's heading folds everything under it away.
+    @Test fun foldingAComputerHidesItsBotsTasksAndProjectsAndLeavesTheOthersOpen() {
+        val rows = build(
+            listOf(
+                SessionListItem.Bots(listOf(row("studio-bot"), row("terminal-bot", machineId = "machine-c"))),
+                SessionListItem.Tasks(listOf(row("studio-task"))),
+                project("happy", ProjectSource.Rig, ownOnly),
+                project("cli", ProjectSource.Happy, listOf(ws("", null, row("b", machineId = "machine-c"))), "machine-c"),
+            ),
+            collapsedMachines = setOf("machine-a"),
+        )
+        assertEquals(
+            listOf("machine:Studio", "machine:Terminal", "section:Bots", "bot:terminal-bot", "section:Projects", "project:cli(0)"),
+            shape(rows, chats = true).filterNot { it.startsWith("chat:") },
+        )
+        val headers = rows.filterIsInstance<ProjectHomeRow.MachineHeader>()
+        assertEquals(listOf(true, false), headers.map { it.collapsed })
+        assertTrue(headers.all { it.foldable })
+        assertFalse(rows.any { it is ProjectHomeRow.Chat && it.session.machineId == "machine-a" })
+    }
+
+    @Test fun aFoldedComputerSpeaksForItsChats() {
+        val rows = build(
+            listOf(
+                SessionListItem.Bots(listOf(row("bot", hasUnread = true))),
+                project("happy", ProjectSource.Rig, listOf(ws("", null, row("a", state = SessionState.PermissionRequired)))),
+                project("cli", ProjectSource.Happy, listOf(ws("", null, row("b", machineId = "machine-c"))), "machine-c"),
+            ),
+            collapsedMachines = setOf("machine-a", "machine-c"),
+        )
+        val (studio, terminal) = rows.filterIsInstance<ProjectHomeRow.MachineHeader>()
+        assertTrue(studio.unread); assertTrue(studio.blocked)
+        assertFalse(terminal.unread); assertFalse(terminal.blocked)
+        assertEquals(setOf("bot", "a"), studio.sessionIds)
+    }
+
+    @Test fun aChatWithNoComputerFoldsUnderTheUnknownHeading() {
+        val rows = build(
+            listOf(SessionListItem.Bots(listOf(row("homeless", machineId = null))), project("happy", ProjectSource.Rig, ownOnly)),
+            collapsedMachines = setOf("unknown"),
+        )
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(0)", "machine:<unknown>"), shape(rows))
+    }
+
+    // The phone draws no heading for a lone computer, so nothing may fold away under it.
+    @Test fun aLoneComputerDoesNotFold() {
+        val data = listOf(project("happy", ProjectSource.Rig, ownOnly))
+        val rows = build(data, collapsedMachines = setOf("machine-a"), linkedComputers = 1)
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(0)"), shape(rows))
+        rows.filterIsInstance<ProjectHomeRow.MachineHeader>().single().let { assertFalse(it.foldable); assertFalse(it.collapsed) }
+        // A second linked computer with no chats still heads the list by name, so the one there folds.
+        assertEquals(listOf("machine:Studio"), shape(build(data, collapsedMachines = setOf("machine-a"), linkedComputers = 2)))
     }
 
     // Repeated labels are repeated rows, and the list keys on the id.

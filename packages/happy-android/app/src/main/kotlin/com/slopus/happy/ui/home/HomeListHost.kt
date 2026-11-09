@@ -151,6 +151,12 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
                     s.copy(collapsedCheckouts = if (folded[id] == true) folded - id else folded + (id to true))
                 }
             },
+            onToggleMachine = { id ->
+                graph.localSettings.change { s ->
+                    val folded = s.collapsedMachines
+                    s.copy(collapsedMachines = if (folded[id] == true) folded - id else folded + (id to true))
+                }
+            },
         )
     }
     // Linking from the empty home approves the code with this account, as Settings' scan does (not

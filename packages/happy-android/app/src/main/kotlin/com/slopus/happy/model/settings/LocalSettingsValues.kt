@@ -39,6 +39,11 @@ data class LocalSettingsValues(
      * key, not in happy-app's schema.
      */
     val collapsedCheckouts: Map<String, Boolean> = emptyMap(),
+    /**
+     * Computers whose bots, tasks and projects the grouped home folds away
+     * under their heading, by machine id (`machineFoldId`). Android's own key.
+     */
+    val collapsedMachines: Map<String, Boolean> = emptyMap(),
     /** Ticked steps of the link-your-computer checklist, by step id. */
     val linkComputerChecklist: Map<String, Boolean> = emptyMap(),
     val unknown: JsonObject = EmptyJson,
@@ -59,6 +64,7 @@ data class LocalSettingsValues(
             "acknowledgedCliVersions" to JsonObject(acknowledgedCliVersions.mapValues { JsonPrimitive(it.value) }),
             "expandedProjects" to JsonObject(expandedProjects.mapValues { JsonPrimitive(it.value) }),
             "collapsedCheckouts" to JsonObject(collapsedCheckouts.mapValues { JsonPrimitive(it.value) }),
+            "collapsedMachines" to JsonObject(collapsedMachines.mapValues { JsonPrimitive(it.value) }),
             "linkComputerChecklist" to JsonObject(linkComputerChecklist.mapValues { JsonPrimitive(it.value) }),
         ),
     )
@@ -104,6 +110,7 @@ data class LocalSettingsValues(
                     acknowledgedCliVersions = record("acknowledgedCliVersions") { asString() },
                     expandedProjects = record("expandedProjects") { asBoolean() },
                     collapsedCheckouts = record("collapsedCheckouts") { asBoolean() },
+                    collapsedMachines = record("collapsedMachines") { asBoolean() },
                     linkComputerChecklist = record("linkComputerChecklist") { asBoolean() },
                     unknown = JsonObject(json - knownKeys),
                 )
