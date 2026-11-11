@@ -105,7 +105,7 @@ data class SpawnSessionOptions(
     val directory: String,
     val approvedNewDirectoryCreation: Boolean = false,
     val token: String? = null,
-    /** codex, claude, gemini, openclaw, agy or rig. */
+    /** codex, claude, gemini, openclaw, agy, cursor or rig. */
     val agent: String? = null,
     val permissionMode: String? = null,
     val modelMode: String? = null,

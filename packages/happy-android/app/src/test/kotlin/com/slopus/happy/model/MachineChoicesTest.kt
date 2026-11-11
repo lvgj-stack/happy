@@ -87,14 +87,15 @@ class MachineChoicesTest {
         val bare = collectMachineChoices(listOf(machine("bare", machineMetadata("old.local"))))[0]
         assertTrue(machineChoiceAgentAvailable(bare, AgentType.Claude))
         assertFalse(machineChoiceAgentAvailable(bare, AgentType.Agy))
+        assertFalse(machineChoiceAgentAvailable(bare, AgentType.Cursor))
         assertFalse(machineChoiceAgentAvailable(bare, AgentType.Rig))
 
-        val installed = collectMachineChoices(listOf(machine("agy", machineMetadata { cliAvailability(claude = true, agy = true) })))[0]
+        val installed = collectMachineChoices(listOf(machine("agy", machineMetadata { cliAvailability(claude = true, agy = true, cursor = true) })))[0]
         assertEquals(listOf(AgentType.Claude, AgentType.Codex), listMachineChoiceAvailableAgents(alone))
-        assertEquals(listOf(AgentType.Claude, AgentType.Agy), listMachineChoiceAvailableAgents(installed))
+        assertEquals(listOf(AgentType.Claude, AgentType.Agy, AgentType.Cursor), listMachineChoiceAvailableAgents(installed))
         assertEquals(listOf(AgentType.Claude, AgentType.Codex, AgentType.Rig), listMachineChoiceAvailableAgents(paired))
 
-        val none = collectMachineChoices(listOf(machine("none", machineMetadata { cliAvailability(agy = false) })))[0]
+        val none = collectMachineChoices(listOf(machine("none", machineMetadata { cliAvailability(agy = false, cursor = false) })))[0]
         assertEquals(emptyList<AgentType>(), listMachineChoiceAvailableAgents(none))
     }
 

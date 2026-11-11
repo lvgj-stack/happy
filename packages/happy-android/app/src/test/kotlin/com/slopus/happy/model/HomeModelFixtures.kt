@@ -113,6 +113,7 @@ object HomeModelFixtures {
         gemini: Boolean = false,
         openclaw: Boolean = false,
         agy: Boolean? = null,
+        cursor: Boolean? = null,
         rig: Boolean? = null,
     ) = putJsonObject("cliAvailability") {
         put("claude", claude)
@@ -120,6 +121,7 @@ object HomeModelFixtures {
         put("gemini", gemini)
         put("openclaw", openclaw)
         agy?.let { put("agy", it) }
+        cursor?.let { put("cursor", it) }
         rig?.let { put("rig", it) }
         put("detectedAt", 1)
     }

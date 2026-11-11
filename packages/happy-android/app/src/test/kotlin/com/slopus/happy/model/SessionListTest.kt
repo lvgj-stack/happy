@@ -190,6 +190,7 @@ class SessionListTest {
         assertEquals(AvatarHarness.Claude, resolveAvatarHarness("claude", null))
         assertEquals(AvatarHarness.Codex, resolveAvatarHarness("codex", null))
         assertEquals(AvatarHarness.Agy, resolveAvatarHarness("agy", null))
+        assertEquals(AvatarHarness.Cursor, resolveAvatarHarness("cursor", null))
         assertEquals(AvatarHarness.Rig, resolveAvatarHarness("codex", "rig"))
         assertEquals(AvatarHarness.Rig, resolveAvatarHarness(null, "rig"))
         for (flavor in listOf("gemini", "openclaw", "future-harness", null)) assertNull(resolveAvatarHarness(flavor, null))

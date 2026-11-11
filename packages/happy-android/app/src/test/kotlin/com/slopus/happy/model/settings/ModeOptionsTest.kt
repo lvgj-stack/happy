@@ -34,6 +34,9 @@ class ModeOptionsTest {
         val agy = ModeOptions.permissionModes("agy", translate)
         assertEquals(listOf("default", "bypassPermissions"), agy.map { it.key })
         assertEquals("string:${R.string.agent_input_permission_mode_agy_default}", agy[0].description)
+        val cursor = ModeOptions.permissionModes("cursor", translate)
+        assertEquals(listOf("agent", "plan", "ask", "yolo"), cursor.map { it.key })
+        assertEquals(listOf("Agent", "Plan", "Ask", "Agent (auto-approve)"), cursor.map { it.name })
         // An unknown flavor gets Claude's.
         assertEquals(claude, ModeOptions.permissionModes(null, translate))
     }
@@ -54,6 +57,7 @@ class ModeOptionsTest {
         assertEquals("most capable", ModeOptions.modelModes("codex")[1].description)
         assertEquals(6, ModeOptions.modelModes("gemini").size)
         assertEquals(listOf("default"), ModeOptions.modelModes("openclaw").map { it.key })
+        assertEquals(listOf("default"), ModeOptions.modelModes("cursor").map { it.key })
         assertEquals("Gemini 3.8 Flash", ModeOptions.modelModes("agy")[0].name)
     }
 
@@ -75,6 +79,9 @@ class ModeOptionsTest {
 
         val gemini = ModeOptions.modelModes("gemini")
         assertEquals(gemini, ModeOptions.includeConfiguredModel("gemini", gemini, "gemini-1"))
+
+        val cursor = ModeOptions.modelModes("cursor")
+        assertEquals(cursor, ModeOptions.includeConfiguredModel("cursor", cursor, "composer-2.5"))
     }
 
     @Test
@@ -90,5 +97,6 @@ class ModeOptionsTest {
         assertEquals(listOf("low", "medium", "high"), ModeOptions.effortLevelsForModel("agy", "Gemini 3.8 Flash").map { it.key })
         assertEquals(emptyList<ModeOption>(), ModeOptions.effortLevelsForModel("agy", "GPT-OSS 120B (Medium)"))
         assertEquals(emptyList<ModeOption>(), ModeOptions.effortLevelsForModel("gemini", "gemini-2.5-pro"))
+        assertEquals(emptyList<ModeOption>(), ModeOptions.effortLevelsForModel("cursor", "default"))
     }
 }

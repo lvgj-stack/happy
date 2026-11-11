@@ -52,6 +52,7 @@ class HomeComponentsLayoutTest {
     fun harnessBadgeGeometry() {
         assertEquals(25 to 16, harnessBadgeSizes(60, AvatarHarness.Rig))
         assertEquals(25 to 18, harnessBadgeSizes(60, AvatarHarness.Codex))
+        assertEquals(25 to 18, harnessBadgeSizes(60, AvatarHarness.Cursor))
         assertEquals(25 to 20, harnessBadgeSizes(60, AvatarHarness.Claude))
         assertEquals(25 to 25, harnessBadgeSizes(60, AvatarHarness.Agy))
     }

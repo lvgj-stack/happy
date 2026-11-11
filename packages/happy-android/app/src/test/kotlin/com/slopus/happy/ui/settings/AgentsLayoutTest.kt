@@ -80,6 +80,7 @@ class AgentsLayoutTest {
         rule.onNodeWithText("CLAUDE CODE").assertIsDisplayed()
         rule.onNodeWithText("CODEX").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("ANTIGRAVITY").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("CURSOR").performScrollTo().assertIsDisplayed()
         rule.onAllNodesWithText("GEMINI").assertCountEquals(0)
         rule.onAllNodesWithText("OPENCLAW").assertCountEquals(0)
         // No CLI version known: auto stays, Claude keeps the model before Opus 5.5.

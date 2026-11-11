@@ -10,6 +10,7 @@ enum class AgentType(val wire: String, val displayName: String) {
     Gemini("gemini", "Gemini"),
     OpenClaw("openclaw", "OpenClaw"),
     Agy("agy", "Antigravity"),
+    Cursor("cursor", "Cursor"),
     Rig("rig", "Happy");
 
     /** harnessCatalog.ts RETIRED_HARNESSES: kept for naming old sessions, never offered. */
@@ -19,7 +20,7 @@ enum class AgentType(val wire: String, val displayName: String) {
         fun fromWire(value: String?): AgentType? = entries.find { it.wire == value }
 
         /** harnessCatalog.ts HARNESS_ORDER: the ones people reach for first. */
-        val Order = listOf(Claude, Codex, Agy, Rig)
+        val Order = listOf(Claude, Codex, Agy, Cursor, Rig)
 
         /** harnessCatalog.ts getHarnessName */
         fun harnessName(key: String): String = fromWire(key)?.displayName ?: key
@@ -33,14 +34,16 @@ private fun CliAvailability.has(agent: AgentType): Boolean = when (agent) {
     AgentType.Gemini -> gemini
     AgentType.OpenClaw -> openclaw
     AgentType.Agy -> agy == true
+    AgentType.Cursor -> cursor == true
     AgentType.Rig -> rig == true
 }
 
 /** harnessCatalog.ts `isHarnessAvailable` */
 fun isHarnessAvailable(availability: CliAvailability?, happyAgentAvailable: Boolean, key: AgentType): Boolean = when (key) {
     AgentType.Rig -> happyAgentAvailable
-    // Only an explicit installation report advertises Antigravity.
+    // Only an explicit installation report advertises Antigravity or Cursor.
     AgentType.Agy -> availability?.agy == true
+    AgentType.Cursor -> availability?.cursor == true
     else -> availability == null || availability.has(key)
 }
 

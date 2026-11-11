@@ -79,7 +79,7 @@ class MachineScreenTest {
             put("displayName", "Studio")
             put("username", "dev")
             put("arch", "arm64")
-            cliAvailability(claude = true, codex = false, rig = true)
+            cliAvailability(claude = true, codex = false, agy = true, cursor = true, rig = true)
         },
         active = true,
         activeAt = 1_700_000_000_000,
@@ -107,6 +107,8 @@ class MachineScreenTest {
         rule.onNodeWithText("4242").assertExists()
         // A zero port is falsy in happy-app and not shown.
         rule.onNodeWithText("Last Known HTTP Port").assertDoesNotExist()
+        rule.onNodeWithText("Antigravity").performScrollTo().assertExists()
+        rule.onNodeWithText("Cursor").performScrollTo().assertExists()
         rule.onNodeWithText("Rig").performScrollTo().assertExists()
     }
 

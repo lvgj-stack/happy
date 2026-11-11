@@ -102,6 +102,19 @@ class ComposerModesTest {
         assertEquals(listOf("Plan", "Build", "Default"), modes.map { it.name })
         assertEquals("Workspace", ModeOptions.permissionModeShortLabel(ModeOption("w", "Workspace write")))
         assertNull(ModeOptions.permissionModeShortLabel(null))
+
+        val cursor = plain("cursor") {
+            put("operatingModes", Json.parseToJsonElement("""[{"code":"agent","value":"Agent"},{"code":"plan","value":"Plan"},{"code":"ask","value":"Ask"},{"code":"yolo","value":"Agent (auto-approve)"}]"""))
+            put("currentOperatingModeCode", "agent")
+            put("models", Json.parseToJsonElement("""[{"code":"composer-2.5","value":"Composer 2.5"},{"code":"claude-opus-5-5[context=300k,effort=medium,fast=false]","value":"Claude Opus 5.5"}]"""))
+            put("currentModelCode", "claude-opus-5-5[context=300k,effort=medium,fast=false]")
+        }
+        val resolvedCursor = ComposerModeResolver.resolve(cursor, ComposerMirror(), null, translate)
+        assertEquals(listOf("plan", "agent", "ask", "yolo"), resolvedCursor.availableModes.map { it.key })
+        assertEquals("agent", resolvedCursor.permissionMode?.key)
+        assertEquals(listOf("composer-2.5", "claude-opus-5-5[context=300k,effort=medium,fast=false]"), resolvedCursor.availableModels.map { it.key })
+        assertEquals("claude-opus-5-5[context=300k,effort=medium,fast=false]", resolvedCursor.modelMode?.key)
+        assertEquals(emptyList<ModeOption>(), resolvedCursor.availableEffortLevels)
     }
 
     @Test

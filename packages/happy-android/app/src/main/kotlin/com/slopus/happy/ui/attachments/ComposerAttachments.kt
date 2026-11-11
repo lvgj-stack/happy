@@ -64,7 +64,7 @@ fun canUseAttachments(metadata: SessionMetadata?): Boolean =
  */
 fun canUseAttachments(starting: AgentType): Boolean = when (starting) {
     AgentType.Claude, AgentType.Codex, AgentType.Rig -> true
-    AgentType.Gemini, AgentType.OpenClaw, AgentType.Agy -> false
+    AgentType.Gemini, AgentType.OpenClaw, AgentType.Agy, AgentType.Cursor -> false
 }
 
 /**

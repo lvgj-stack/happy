@@ -10,7 +10,8 @@ enum class AgentKey(val wire: String) {
     Codex("codex"),
     Gemini("gemini"),
     Openclaw("openclaw"),
-    Agy("agy");
+    Agy("agy"),
+    Cursor("cursor");
 
     companion object {
         /** normalizeAgentKey: an unknown or missing flavor is Claude. */
@@ -96,6 +97,7 @@ object AgentDefaults {
         AgentKey.Gemini to AgentDefaultConfig("default", "gemini-2.5-pro", null),
         AgentKey.Openclaw to AgentDefaultConfig("default", "default", null),
         AgentKey.Agy to AgentDefaultConfig("default", "Gemini 3.8 Flash", "medium"),
+        AgentKey.Cursor to AgentDefaultConfig("agent", "default", null),
     )
 
     /**

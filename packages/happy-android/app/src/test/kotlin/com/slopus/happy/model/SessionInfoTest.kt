@@ -37,6 +37,7 @@ class SessionInfoTest {
 
     @Test fun bareResumeWithoutAPathAndNothingWithoutAnId() {
         assertEquals("happy claude --resume $claudeId", metadata(path = "") { put("flavor", "claude"); put("claudeSessionId", claudeId) }.resumeCommand())
+        assertEquals("cd '/tmp/project' && happy cursor --resume cur-1", metadata(path = "/tmp/project") { put("flavor", "cursor"); put("cursorSessionId", "cur-1") }.resumeCommand())
         assertNull(metadata(path = "/tmp/project") { put("flavor", "claude") }.resumeCommand())
         assertEquals("cd 'it'\\''s' && happy claude --resume x", metadata(path = "it's") { put("claudeSessionId", "x") }.resumeCommand())
     }
@@ -67,6 +68,7 @@ class SessionInfoTest {
     @Test fun providerNamesAndShortIds() {
         assertEquals("Claude", metadata().aiProviderName())
         assertEquals("Codex", metadata { put("flavor", "openai") }.aiProviderName())
+        assertEquals("Cursor", metadata { put("flavor", "cursor") }.aiProviderName())
         assertEquals("custom", metadata { put("flavor", "custom") }.aiProviderName())
         assertEquals("abcdefgh...stuvwxyz", shortId("abcdefghijklmnopqrstuvwxyz"))
     }

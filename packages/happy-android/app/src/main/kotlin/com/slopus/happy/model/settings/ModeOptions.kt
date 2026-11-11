@@ -76,12 +76,20 @@ object ModeOptions {
         ModeOption("bypassPermissions", "Yolo", translate(R.string.agent_input_permission_mode_bypass_permissions)),
     )
 
+    private fun cursorPermissionModes(translate: (Int) -> String) = listOf(
+        ModeOption("agent", "Agent", translate(R.string.agent_input_permission_mode_cursor_agent)),
+        ModeOption("plan", "Plan", translate(R.string.agent_input_permission_mode_plan)),
+        ModeOption("ask", "Ask", translate(R.string.agent_input_permission_mode_cursor_ask)),
+        ModeOption("yolo", "Agent (auto-approve)", translate(R.string.agent_input_permission_mode_cursor_yolo)),
+    )
+
     /** getHardcodedPermissionModes: Claude's for an unknown flavor. */
     fun permissionModes(flavor: String?, translate: (Int) -> String): List<ModeOption> = when (flavor) {
         "codex" -> codexPermissionModes(translate)
         "gemini" -> geminiPermissionModes(translate)
         "openclaw" -> openClawPermissionModes(translate)
         "agy" -> agyPermissionModes(translate)
+        "cursor" -> cursorPermissionModes(translate)
         else -> claudePermissionModes(translate)
     }
 
@@ -124,6 +132,7 @@ object ModeOptions {
     )
 
     private val openClawModelModes = listOf(ModeOption("default", "Default model"))
+    private val cursorModelModes = listOf(ModeOption("default", "Default model"))
 
     private val agyModelModes = listOf(
         ModeOption("Gemini 3.8 Flash", "Gemini 3.8 Flash"),
@@ -138,6 +147,7 @@ object ModeOptions {
         "gemini" -> geminiModelModes
         "openclaw" -> openClawModelModes
         "agy" -> agyModelModes
+        "cursor" -> cursorModelModes
         else -> claudeModelModes
     }
 

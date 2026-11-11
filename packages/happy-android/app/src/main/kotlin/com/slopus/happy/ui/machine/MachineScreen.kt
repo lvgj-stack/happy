@@ -351,6 +351,8 @@ fun MachineScreen(
                         CliRow("Codex", cli.codex)
                         CliRow("Gemini", cli.gemini)
                         CliRow("OpenClaw", cli.openclaw)
+                        cli.agy?.let { CliRow("Antigravity", it) }
+                        cli.cursor?.let { CliRow("Cursor", it) }
                         cli.rig?.let { CliRow("Rig", it) }
                         Item(stringResource(R.string.machine_last_detected), subtitle = formatLocaleDateTime(cli.detectedAt, zone), showChevron = false)
                     }

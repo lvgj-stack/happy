@@ -26,6 +26,7 @@ fun SessionMetadata?.resumeCommandBlock(): ResumeCommandBlock? {
     if (this == null || client?.id == "rig" || (raw["capabilities"] as? JsonObject)?.get("resume") == JsonPrimitive(false)) return null
     val invocation = when {
         (flavor == "codex" || flavor == "openai" || flavor == "gpt") && !codexThreadId.isNullOrEmpty() -> "happy codex --resume $codexThreadId"
+        flavor == "cursor" && !cursorSessionId.isNullOrEmpty() -> "happy cursor --resume $cursorSessionId"
         !claudeSessionId.isNullOrEmpty() -> "happy claude --resume $claudeSessionId"
         else -> return null
     }
@@ -82,6 +83,7 @@ fun SessionMetadata.aiProviderName(): String {
         "gpt", "openai" -> "Codex"
         "gemini" -> "Gemini"
         "openclaw" -> "OpenClaw"
+        "cursor" -> "Cursor"
         else -> flavor
     }
 }

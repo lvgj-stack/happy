@@ -306,6 +306,13 @@ class HomeListTest {
 
     @Test fun resumeIsForADisconnectedCliSessionOnItsOnlineMachine() {
         assertEquals(ResumeAvailability(true, true, null), resumeAvailability(resumable(), resumeMachine))
+        assertEquals(
+            ResumeAvailability(true, true, null),
+            resumeAvailability(
+                session("s-cur", metadata = metadata { put("machineId", "m1"); put("flavor", "cursor"); put("cursorSessionId", "cur-1") }, active = false),
+                resumeMachine,
+            ),
+        )
         assertEquals(ResumeAvailability.Hidden, resumeAvailability(resumable(active = true), resumeMachine))
         assertEquals(ResumeAvailability.blocked(ResumeBlock.SameMachineOnly), resumeAvailability(resumable(), null))
         assertEquals(ResumeAvailability.blocked(ResumeBlock.MachineOffline), resumeAvailability(resumable(), resumeMachine.copy(active = false)))

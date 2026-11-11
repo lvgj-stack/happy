@@ -93,6 +93,7 @@ class MessageMetaTest {
     fun codexAndAgyAlwaysSendTheDisplayedDefaults() {
         assertEquals(meta("auto", "gpt-6.1-sol", "medium"), mode(metadata("codex")))
         assertEquals(meta("default", "Gemini 3.8 Flash", "medium"), mode(metadata("agy")))
+        assertEquals(MessageModeMeta(), mode(metadata("cursor"), overrides = overrides("""{"claude":{"permissionMode":"plan","modelMode":"claude-opus-5-5","effortLevel":"high"}}""")))
     }
 
     @Test

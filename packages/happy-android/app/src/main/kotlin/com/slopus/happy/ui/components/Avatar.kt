@@ -68,7 +68,7 @@ internal fun harnessBadgeSizes(size: Int, harness: AvatarHarness): Pair<Int, Int
     val circle = (size * 0.42).roundToInt()
     val icon = when (harness) {
         AvatarHarness.Rig -> (size * 0.26).roundToInt()
-        AvatarHarness.Codex -> (size * 0.3).roundToInt()
+        AvatarHarness.Codex, AvatarHarness.Cursor -> (size * 0.3).roundToInt()
         AvatarHarness.Claude -> (size * 0.34).roundToInt()
         AvatarHarness.Agy -> (size * 0.42).roundToInt()
     }
@@ -161,12 +161,13 @@ fun Avatar(
                             AvatarHarness.Claude -> R.drawable.icon_claude
                             AvatarHarness.Codex -> R.drawable.icon_gpt
                             AvatarHarness.Agy -> R.drawable.icon_agy
+                            AvatarHarness.Cursor -> R.drawable.icon_cursor
                             AvatarHarness.Rig -> R.drawable.happy_logo
                         },
                     ),
                     contentDescription = null,
                     contentScale = ContentScale.Fit,
-                    colorFilter = if (harness == AvatarHarness.Codex || harness == AvatarHarness.Rig) ColorFilter.tint(colors.text) else null,
+                    colorFilter = if (harness == AvatarHarness.Codex || harness == AvatarHarness.Cursor || harness == AvatarHarness.Rig) ColorFilter.tint(colors.text) else null,
                     modifier = Modifier.size(icon.dp),
                 )
             }

@@ -141,7 +141,7 @@ fun <T> indexSessionsById(sessions: Iterable<T>, id: (T) -> String): Map<String,
     LinkedHashMap<String, T>().apply { sessions.forEach { put(id(it), it) } }
 
 /** utils/avatarHarness.ts: which harness badge a session avatar carries. */
-enum class AvatarHarness { Claude, Codex, Agy, Rig }
+enum class AvatarHarness { Claude, Codex, Agy, Cursor, Rig }
 
 fun resolveAvatarHarness(flavor: String?, clientId: String?): AvatarHarness? {
     if (clientId == "rig") return AvatarHarness.Rig
@@ -149,6 +149,7 @@ fun resolveAvatarHarness(flavor: String?, clientId: String?): AvatarHarness? {
         "claude" -> AvatarHarness.Claude
         "codex" -> AvatarHarness.Codex
         "agy" -> AvatarHarness.Agy
+        "cursor" -> AvatarHarness.Cursor
         else -> null
     }
 }

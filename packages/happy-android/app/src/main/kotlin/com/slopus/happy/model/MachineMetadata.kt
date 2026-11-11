@@ -14,6 +14,8 @@ data class CliAvailability(
     val openclaw: Boolean,
     /** Older CLIs do not report it. */
     val agy: Boolean?,
+    /** Older CLIs do not report it. */
+    val cursor: Boolean? = null,
     /** Rig runs its own Happy-connected daemon. */
     val rig: Boolean?,
     val detectedAt: Long,
@@ -104,6 +106,7 @@ data class MachineMetadata(
                         gemini = o.required("gemini", Read.boolean),
                         openclaw = o.required("openclaw", Read.boolean),
                         agy = o.optional("agy", Read.boolean),
+                        cursor = o.optional("cursor", Read.boolean),
                         rig = o.optional("rig", Read.boolean),
                         detectedAt = o.required("detectedAt", Read.long),
                     )
