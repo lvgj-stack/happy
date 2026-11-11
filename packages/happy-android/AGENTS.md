@@ -386,6 +386,10 @@ win:
   keeps its choice on this phone (`agentShowHarnessIconsInSessionList`).
   List avatars carry no duplicate harness badge. Happy Agent uses Happy's
   icon, regardless of provider; unknown metadata gets a generic chip.
+  Retired Gemini and OpenClaw sessions retain their own artwork; OpenClaw's
+  vector and its license/provenance come from the upstream pixel lobster.
+  A row's merged accessibility description includes its name and context
+  before the icon's harness name, so the icon never replaces the title.
 - **Legacy tasks** (iOS 36b11c5bf): a Happy Agent session with
   `metadata.task` is a task. Each computer's tasks follow its bots, in
   the person's `orderKey` (plain string order), then unjoined ones newest

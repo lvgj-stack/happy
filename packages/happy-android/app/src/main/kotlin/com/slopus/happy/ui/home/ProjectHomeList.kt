@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -506,6 +507,7 @@ private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boo
 @Composable
 private fun CheckoutChatRow(row: ProjectHomeRow.Chat, callbacks: HomeListCallbacks, carded: Boolean, selected: Boolean) {
     val session = row.session
+    val name = session.name ?: stringResource(R.string.session_new_chat)
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(session.id) } }
     val colors = HappyTheme.colors
     val now = activity(listOf(session))
@@ -522,6 +524,7 @@ private fun CheckoutChatRow(row: ProjectHomeRow.Chat, callbacks: HomeListCallbac
                 .height(ProjectListSpec.worktreeRow)
                 .testTag(ProjectListTags.CHECKOUT_CHAT)
                 .background(ground)
+                .semantics { contentDescription = name }
                 .sessionPressDown(session.id, callbacks)
                 .combinedClickable(
                     role = Role.Button,
@@ -538,7 +541,7 @@ private fun CheckoutChatRow(row: ProjectHomeRow.Chat, callbacks: HomeListCallbac
                 AvatarLane { TreeBranch(row.last) }
             }
             SessionHarnessIcon(session.flavor, session.clientId)
-            RowName(session.name ?: stringResource(R.string.session_new_chat), now.working, ProjectListSpec.worktreeName)
+            RowName(name, now.working, ProjectListSpec.worktreeName)
             Box(modifier = Modifier.padding(start = ProjectListSpec.trailingGap)) {
                 AttentionDot(now.blocked, now.unread)
             }
@@ -587,6 +590,7 @@ private fun WorktreeToggleRow(toggle: WorktreeToggle, callbacks: HomeListCallbac
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatRow(session: SessionRowData, bot: Boolean, archived: Boolean, callbacks: HomeListCallbacks) {
+    val name = session.name ?: stringResource(R.string.session_new_chat)
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(session.id) } }
     val presentation = resolveFlatRowPresentation(session.state, session.hasUnread, archived || session.machineOffline)
     val dot = presentation.topRight as? FlatRowTopRight.Dot
@@ -602,6 +606,7 @@ private fun ChatRow(session: SessionRowData, bot: Boolean, archived: Boolean, ca
                 .height(ProjectListSpec.botRow)
                 .alpha(if (archived) ProjectListSpec.ARCHIVED_ALPHA else 1f)
                 .testTag(ProjectListTags.CHAT)
+                .semantics { contentDescription = name }
                 .sessionPressDown(session.id, callbacks)
                 .then(
                     if (session.task) {
@@ -615,7 +620,7 @@ private fun ChatRow(session: SessionRowData, bot: Boolean, archived: Boolean, ca
         ) {
             AvatarLane { Avatar(id = session.avatarId, size = ProjectListSpec.avatar, bot = bot, imageUri = session.avatarUri, thumbhash = session.avatarThumbhash) }
             SessionHarnessIcon(session.flavor, session.clientId)
-            RowName(session.name ?: stringResource(R.string.session_new_chat), presentation.shimmerTitle, ProjectListSpec.projectName)
+            RowName(name, presentation.shimmerTitle, ProjectListSpec.projectName)
             if (dot != null) {
                 Box(modifier = Modifier.padding(start = ProjectListSpec.trailingGap)) {
                     StatusDot(color = if (dot.blocked) BlockedDotColor else UnreadDotColor, size = ProjectListSpec.chatDot)

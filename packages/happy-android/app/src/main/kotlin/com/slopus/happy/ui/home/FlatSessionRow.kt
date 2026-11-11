@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -138,7 +139,7 @@ fun gitRemovedColor(colors: HappyColors) = if (colors.dark) Color(0xFFFF453A) el
  * One session in the flat home list: 60 avatar centred in a row padded 16
  * either side and 10 above and below; title 17/22 semibold (shimmering while
  * the agent works, its last 14 fading where it runs out of room,
- * [com.slopus.happy.ui.components.TitleFade]) with a 20 dot after it while it waits or is unread (its
+ * [com.slopus.happy.ui.components.TitleFade]), after a 16 harness icon and 6 gap; a 20 dot follows while it waits or is unread (its
  * slot kept, so the title never moves; no time); the project 15/20; the
  * worktree 13/18 with a 13 branch glyph, then the draft glyph and line
  * counts. A hairline runs from the text (x = 88) to the edge. Archived rows,
@@ -200,8 +201,10 @@ fun FlatSessionRow(
                 .testTag(FlatRowTags.ROW)
                 .background(ground)
                 .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
+                .semantics { contentDescription = listOfNotNull(name, row.projectName, row.workspaceName).filter { it.isNotBlank() }.joinToString(", ") }
                 .sessionPressDown(session.id, callbacks)
                 .combinedClickable(
+                    role = Role.Button,
                     onClick = { callbacks.onOpen(session.id) },
                     onLongClick = { callbacks.onMenu(session.id) },
                 )

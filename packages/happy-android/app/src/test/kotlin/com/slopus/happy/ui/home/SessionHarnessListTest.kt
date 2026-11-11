@@ -9,12 +9,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.Role
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.slopus.happy.agent.AgentFeedRow
 import com.slopus.happy.agent.ConversationKind
@@ -164,5 +172,65 @@ class SessionHarnessListTest {
         assertDp("row stays 48 high", 48, row.bottom - row.top)
         assertTrue(icon.right < title.left)
         assertTrue("title leaves room at the row's end", title.right < row.right - 16.dp)
+    }
+
+    @Test
+    fun flatSessionDescriptionKeepsItsTitleAndProjectAlongsideTheHarness() {
+        rule.setHappyContent {
+            Box(Modifier.fillMaxWidth().height(81.dp)) {
+                FlatSessionRow(FlatSessionRowData(session("Fix login", "codex"), "happy", "feature"), false, false, callbacks, carded = true)
+            }
+        }
+        val node = rule.onNodeWithTag(FlatRowTags.ROW, useUnmergedTree = false).fetchSemanticsNode()
+        val description = node.config[SemanticsProperties.ContentDescription].joinToString(", ")
+        assertTrue("session title missing from spoken description: $description", description.contains("Fix login"))
+        assertTrue(description.contains("happy"))
+        assertTrue(description.contains("feature"))
+        assertTrue(description.contains("Codex"))
+        assertEquals(Role.Button, node.config[SemanticsProperties.Role])
+    }
+
+    @Test
+    fun projectSessionDescriptionKeepsItsTitleAlongsideTheHarness() {
+        rule.setHappyContent {
+            ProjectHomeRowContent(ProjectHomeRow.Chat(session("Worktree chat", "cursor"), true, true), callbacks)
+        }
+        val node = rule.onNodeWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = false).fetchSemanticsNode()
+        val description = node.config[SemanticsProperties.ContentDescription].joinToString(", ")
+        assertTrue("session title missing from spoken description: $description", description.contains("Worktree chat"))
+        assertTrue(description.contains("Cursor"))
+    }
+
+    @Test
+    fun agentSessionDescriptionKeepsItsTitleAndOwnerAlongsideTheHarness() {
+        val conversation = AgentFeedRow.Conversation("agent", "Review the PR", ConversationKind.Task, 0, owner = "Steve")
+        rule.setHappyContent {
+            AgentHomeCardRow(AgentHomeItem.Row(conversation, true, true), Modifier.fillMaxWidth(), false, "agent-row", {}, {}, {})
+        }
+        val node = rule.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("agent-row")), useUnmergedTree = false).fetchSemanticsNode()
+        val description = node.config[SemanticsProperties.ContentDescription].joinToString(", ")
+        assertTrue("session title missing from spoken description: $description", description.contains("Review the PR"))
+        assertTrue(description.contains("Steve"))
+        assertTrue(description.contains("Happy"))
+    }
+
+    @Test
+    fun archivedSessionDescriptionKeepsItsNameAlongsideTheHarness() {
+        rule.setHappyContent { ProjectHomeRowContent(ProjectHomeRow.Archived(session("Release notes", "agy")), callbacks) }
+        val node = rule.onNodeWithTag(ProjectListTags.CHAT, useUnmergedTree = false).fetchSemanticsNode()
+        val description = node.config[SemanticsProperties.ContentDescription].joinToString(", ")
+        assertTrue("session title missing from spoken description: $description", description.contains("Release notes"))
+        assertTrue(description.contains("Antigravity"))
+    }
+
+    @Test
+    fun openClawHasItsOwnRedArtworkInsteadOfTheGenericChip() {
+        rule.setHappyContent { ProjectHomeRowContent(ProjectHomeRow.Chat(session("Old chat", "openclaw"), false, true), callbacks) }
+        val icon = rule.onNodeWithContentDescription("OpenClaw", useUnmergedTree = true)
+        icon.assertIsDisplayed()
+        val pixels = icon.captureToImage().toPixelMap()
+        assertTrue("OpenClaw's red artwork is missing", (0 until pixels.width).any { x ->
+            (0 until pixels.height).any { y -> pixels[x, y].let { it.red > 0.7f && it.green < 0.6f && it.blue < 0.6f } }
+        })
     }
 }

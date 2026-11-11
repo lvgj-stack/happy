@@ -43,8 +43,9 @@ fun SessionHarnessIcon(flavor: String? = null, clientId: String? = null, modifie
         AgentType.Cursor -> R.drawable.icon_cursor
         AgentType.Agy -> R.drawable.icon_agy
         AgentType.Gemini -> R.drawable.icon_gemini
+        AgentType.OpenClaw -> R.drawable.icon_openclaw
         AgentType.Rig -> R.drawable.happy_logo
-        AgentType.OpenClaw, null -> null
+        null -> null
     }
     val icon = Modifier.size(SessionHarnessIconSpec.size).testTag(SessionHarnessIconTags.ICON)
     Box(modifier.padding(end = SessionHarnessIconSpec.titleGap)) {

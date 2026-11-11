@@ -544,6 +544,7 @@ private fun ConversationRow(row: AgentFeedRow.Conversation, onOpen: (String) -> 
     val placed = remember { arrayOfNulls<LayoutCoordinates>(1) }
     val marked = AgentHomeSpec.hasMark(row.kind)
     val title = row.title ?: stringResource(R.string.session_new_chat)
+    val spokenTitle = listOfNotNull(title, row.owner).filter { it.isNotBlank() }.joinToString(", ")
     val working = stringResource(R.string.agent_home_working)
     // The call's press of this row ([VoiceTouch]): its light in the card's shape, which clips it, and the ripple.
     val voice = rememberVoiceTouchSource()
@@ -553,6 +554,7 @@ private fun ConversationRow(row: AgentFeedRow.Conversation, onOpen: (String) -> 
             .onPlaced { placed[0] = it }
             .voiceTouch(CallControl.Row(row.agentId), RectangleShape, voice)
             .indication(voice, LocalIndication.current)
+            .semantics { contentDescription = spokenTitle }
             .combinedClickable(
                 role = Role.Button,
                 onLongClick = onHold?.let { hold ->
