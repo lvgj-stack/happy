@@ -77,7 +77,30 @@ final class AppConfigurationTests: XCTestCase {
             XCTAssertEqual(settings.map { $0.trimmingCharacters(in: .whitespaces) }, ["MARKETING_VERSION: \"\(version)\""], spec)
         }
         for variant in AppVariant.allCases {
-            XCTAssertEqual(try plist(variant)["CFBundleVersion"] as? String, variant == .production ? "158" : "1")
+            XCTAssertEqual(try plist(variant)["CFBundleVersion"] as? String, variant == .production ? "163" : "1")
+        }
+    }
+
+    /// Continue with Google: every variant names its own iOS client in
+    /// project.yml (`HAPPY_GOOGLE_CLIENT`, the one Google made for its
+    /// bundle id), and the plists make GIDClientID and its reversed URL
+    /// scheme from it, beside `happy`.
+    func testEveryVariantHasItsOwnGoogleClient() throws {
+        let clients: [(AppVariant, String)] = [
+            (.development, "902947412706-3563t62iimaknc7lq6fdhgcgna7eff1l"),
+            (.preview, "902947412706-0s9bb1000luv6d9vkdbau31h2i69gad0"),
+            (.production, "902947412706-3a9fl74rsj3566r0a9i2310mgeu1qd09"),
+        ]
+        let project = try String(contentsOf: appDirectory.deletingLastPathComponent().appendingPathComponent("project.yml"), encoding: .utf8)
+        let lines = project.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(lines.filter { $0.hasPrefix("HAPPY_GOOGLE_CLIENT:") }.count, clients.count)
+        for (variant, client) in clients {
+            let bundle = try XCTUnwrap(lines.firstIndex(of: "PRODUCT_BUNDLE_IDENTIFIER: \(variant.bundleIdentifier)"), variant.rawValue)
+            XCTAssertTrue(lines[bundle..<min(lines.count, bundle + 5)].contains("HAPPY_GOOGLE_CLIENT: \(client)"), variant.rawValue)
+            let info = try plist(variant)
+            XCTAssertEqual(info["GIDClientID"] as? String, "$(HAPPY_GOOGLE_CLIENT).apps.googleusercontent.com")
+            let schemes = (info["CFBundleURLTypes"] as? [[String: Any]])?.compactMap { $0["CFBundleURLSchemes"] as? [String] }
+            XCTAssertEqual(schemes, [["happy"], ["com.googleusercontent.apps.$(HAPPY_GOOGLE_CLIENT)"]])
         }
     }
 

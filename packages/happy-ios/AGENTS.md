@@ -176,7 +176,8 @@ and fixtures remain. Preserve credential and push compatibility on upgrades.
   v2 ("Happy Agent v2public" and its sendMessage, listSessions,
   getSessionContext and openSession) is what the shipped App Store build
   calls: frozen, never edited.
-  The call hears from the last four conversations visited (`CallContext`):
+  The call hears from the last four conversations visited or messaged
+  (`CallContext`):
   only their agents' new words, each piece once and whole when complete
   (the agent went on past it in its run, or the run is no longer the
   newest or working; never on a pause, never as it streams, never because
@@ -192,6 +193,11 @@ and fixtures remain. Preserve credential and push compatibility on upgrades.
   finger on its row reaches (`WarmChats.intent`), and both a read and a send
   wait for its first page: one never opened on this phone takes a message
   by voice, and a read or send after it finds it kept, not started over.
+  A read answers at once with what the phone has; one not current is
+  marked `refreshing` and made current behind it for up to eight seconds
+  (`SessionCallTargets.refreshed`), what is new then told as a
+  `conversation_update` cue (a silent line if nothing is, or it doesn't
+  come current).
   It ends on background, interruption, lost route, account change and when
   the relay's voice starts. For launch it connects to a public agent by its
   ID (`PublicAgentCallGrants`): a connection mechanism, not authentication.
@@ -213,7 +219,7 @@ and fixtures remain. Preserve credential and push compatibility on upgrades.
   (`HAPPY_REVENUE_CAT_APPLE_KEY` → `HappyRevenueCatAppleKey`). It is on sale
   only when the current offering's `$rc_monthly` is a one-month
   auto-renewable App Store product, at the store's price; anything else,
-  nothing is sold. RevenueCat's `pro`, from any product, gives 5 hours a
+  nothing is sold. RevenueCat's `pro`, from any product, gives 2 hours a
   paid month in place of the free time. The customer is the install's own
   anonymous id, kept on the phone: no Happy account, sign-in or analytics
   id touches it. Its `appAccountToken` is that id's hex as a UUID, so an
@@ -452,6 +458,13 @@ and fixtures remain. Preserve credential and push compatibility on upgrades.
       account, or "Happy account" (rule 10).
     - A registry rebuilt from the Keychain after corruption loses the
       origin, so those accounts come back as legacy.
+  - **A computer's code goes to an account already here.** Opened as a
+    link or scanned to connect, a `happy://terminal?` code goes to the
+    Happy account in use; with an agent connection shown, to the one used
+    last (the registry's active one), which is shown first
+    (`accountForComputer`, `ScanRoute.connectComputerSwitching`).
+    Authenticate Terminal names that account. Only with none here is a new
+    one made; Add account always makes one.
   - **Account id.** The account's anonymous id, derived from its secret,
     so it is known offline and the same account is never listed twice.
   - **Separate caches.** Each account has its own directory,
@@ -669,6 +682,10 @@ identical and checks the variant keys:
 
 Every variant asks for push (`aps-environment`). Production adds associated
 domains; development and preview add Sign in with Apple for Happy Cloud.
+Each variant has its own Google iOS client for Continue with Google:
+`HAPPY_GOOGLE_CLIENT` in `project.yml`'s Happy target, which the plists
+turn into `GIDClientID` and its reversed-client-ID URL scheme. xtool doesn't
+expand it, so an xtool build's Continue with Google fails at Google.
 
 ### Versioning
 
@@ -704,6 +721,9 @@ and preview ship the same number on their own listings.
 - `CFBundleVersion` (`CURRENT_PROJECT_VERSION`) stays the build number:
   production's is set in `App/Info-Production.plist` and the Happy target's
   Release settings; preview uploads let Xcode pick the next free one.
+- Settings › Version shows both, `2026.11.1 (160)`, as Android shows
+  `versionName (versionCode)`; outside production the variant follows
+  (`2026.11.1 (171) / preview`).
 - The version also goes out as `X-Happy-Client: ios/<version>` and in
   `POST /v1/version` (the server's semver range `>=1.4.1` admits it). The
   server uses the header only for metrics labels.
@@ -727,7 +747,10 @@ and preview ship the same number on their own listings.
 - Don't add a dependency without saying why in the PR. Current ones:
   - GRDB;
   - swift-crypto, Linux only;
-  - swift-asn1, which swift-crypto pulls in.
+  - swift-asn1, which swift-crypto pulls in;
+  - GoogleSignIn-iOS, iOS only, for Happy Cloud's Continue with Google
+    (with AppAuth, GTMAppAuth, gtm-session-fetcher and app-check, which it
+    pulls in).
 
 ## Workstreams
 

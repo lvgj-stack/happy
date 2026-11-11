@@ -19,6 +19,16 @@ sealed interface AgentFeedRow {
         override val key get() = "artifacts"
     }
 
+    /** Desktop's Plugins row under Artifacts, where the connection has plugins: those installed and the rest it offers. */
+    data object Plugins : AgentFeedRow {
+        override val key get() = "plugins"
+    }
+
+    /** Desktop's Pipelines row under Plugins, where the server runs pipelines: them and every run. */
+    data object Pipelines : AgentFeedRow {
+        override val key get() = "pipelines"
+    }
+
     /** Desktop's Feed row under Artifacts, while the computer keeps a feed for the person: how many entries they haven't seen. */
     data class Feed(val unread: Int) : AgentFeedRow {
         override val key get() = "feed"
@@ -170,6 +180,10 @@ data class AgentFeed(val loaded: Boolean = false, val rows: List<AgentFeedRow> =
             feedUnread: Int? = null,
             /** Team members read so far ([TeamDirectory]), whose faces their tasks wear. */
             users: Map<String, TeamUser> = emptyMap(),
+            /** The connection has plugins: a Plugins row under Artifacts. */
+            plugins: Boolean = false,
+            /** The server runs pipelines: a Pipelines row under Plugins. */
+            pipelines: Boolean = false,
         ): AgentFeed {
             if (!catalog.loaded) return Empty
             val removed = intents.removed
@@ -251,6 +265,8 @@ data class AgentFeed(val loaded: Boolean = false, val rows: List<AgentFeedRow> =
 
             section(AgentFeedSection.Places) {
                 rows += AgentFeedRow.Artifacts
+                if (plugins) rows += AgentFeedRow.Plugins
+                if (pipelines) rows += AgentFeedRow.Pipelines
                 feedUnread?.let { rows += AgentFeedRow.Feed(it) }
                 rows += AgentFeedRow.Todos
                 catalog.surfaces.values

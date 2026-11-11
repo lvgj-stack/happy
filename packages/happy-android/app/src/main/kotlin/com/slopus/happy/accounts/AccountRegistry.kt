@@ -53,9 +53,21 @@ data class AccountEntry(
  * No tokens or secrets.
  */
 @Serializable
-data class AccountRegistry(val entries: List<AccountEntry> = emptyList(), val activeId: String? = null) {
+data class AccountRegistry(
+    val entries: List<AccountEntry> = emptyList(),
+    val activeId: String? = null,
+    /** The Happy account open last, kept while an agent connection is open ([AccountStore] sets it). */
+    val lastHappyId: String? = null,
+) {
     val ordered: List<AccountEntry> get() = entries.sortedBy { it.addedOrder }
     fun entry(id: String?): AccountEntry? = entries.firstOrNull { it.id == id }
+
+    /**
+     * The Happy account a terminal link (`happy://terminal?`) is approved
+     * with: the open one, else the one open last, else the newest added;
+     * null when the phone has none, and a new one is made for it.
+     */
+    fun forTerminal(): AccountEntry? = entry(activeId) ?: entry(lastHappyId) ?: entries.maxByOrNull { it.addedOrder }
 }
 
 /** An account's own credential item, with its server for recovery. */
@@ -90,7 +102,7 @@ class AccountStore(
     private val defaultServerUrl: String,
     private val importRnServer: () -> ImportedServer,
 ) {
-    private val state = MutableStateFlow(load())
+    private val state = MutableStateFlow(load(prefs))
     val registry: StateFlow<AccountRegistry> = state.asStateFlow()
 
     /**
@@ -141,7 +153,7 @@ class AccountStore(
         }
         val active = current.activeId?.takeIf { id -> kept.any { it.id == id } || !isAccountId(id) }
             ?: kept.minByOrNull { it.addedOrder }?.id
-        current = AccountRegistry(kept, active)
+        current = current.copy(entries = kept, activeId = active)
         save(current)
         return values
     }
@@ -174,7 +186,7 @@ class AccountStore(
             serverConfirmed = existing?.serverConfirmed ?: true,
             display = existing?.display,
         )
-        save(AccountRegistry(current.entries.filterNot { it.id == id } + entry, id))
+        save(current.copy(entries = current.entries.filterNot { it.id == id } + entry, activeId = id))
         return id
     }
 
@@ -192,7 +204,7 @@ class AccountStore(
         }
         val rest = current.entries.filterNot { it.id == id }
         val active = if (current.activeId == id) rest.minByOrNull { it.addedOrder }?.id else current.activeId
-        save(AccountRegistry(rest, active))
+        save(current.copy(entries = rest, activeId = active))
     }
 
     /** Opens [id]: a Happy account here, or an agent connection's id; null opens nothing. */
@@ -221,16 +233,9 @@ class AccountStore(
         save(current.copy(entries = current.entries.map { if (it.id == id) it.copy(display = display) else it }))
     }
 
-    private fun load(): AccountRegistry = try {
-        prefs.getString(KEY, null)?.let { json.decodeFromString(AccountRegistry.serializer(), it) }
-            ?.takeIf { registry -> registry.entries.map { it.id }.toSet().size == registry.entries.size && registry.entries.all { isAccountId(it.id) } }
-            ?: AccountRegistry()
-    } catch (_: Exception) {
-        // Rebuilt from the credentials by the next reconcile.
-        AccountRegistry()
-    }
-
-    private fun save(value: AccountRegistry) {
+    private fun save(registry: AccountRegistry) {
+        // The Happy account open now is the one open last until another opens.
+        val value = if (registry.entry(registry.activeId) != null) registry.copy(lastHappyId = registry.activeId) else registry
         prefs.edit().putString(KEY, json.encodeToString(AccountRegistry.serializer(), value)).commit()
         state.value = value
     }
@@ -243,5 +248,22 @@ class AccountStore(
         private val json = Json { ignoreUnknownKeys = true }
 
         fun isAccountId(id: String) = id.length == 16 && id.all { it in '0'..'9' || it in 'a'..'f' }
+
+        /**
+         * The agent connection open in [prefs], read as the store would read
+         * it, before any store is made ([com.slopus.happy.agent.StartupLink]).
+         * Null for a Happy account or none: [reconcile] keeps an agent
+         * connection's id as it is, and may change only a Happy account's.
+         */
+        fun openAgentId(prefs: SharedPreferences): String? = load(prefs).activeId?.takeUnless(::isAccountId)
+
+        private fun load(prefs: SharedPreferences): AccountRegistry = try {
+            prefs.getString(KEY, null)?.let { json.decodeFromString(AccountRegistry.serializer(), it) }
+                ?.takeIf { registry -> registry.entries.map { it.id }.toSet().size == registry.entries.size && registry.entries.all { isAccountId(it.id) } }
+                ?: AccountRegistry()
+        } catch (_: Exception) {
+            // Rebuilt from the credentials by the next reconcile.
+            AccountRegistry()
+        }
     }
 }

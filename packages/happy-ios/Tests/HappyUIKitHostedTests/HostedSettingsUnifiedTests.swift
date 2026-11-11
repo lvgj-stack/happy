@@ -146,14 +146,16 @@ final class HostedSettingsUnifiedTests: XCTestCase {
             ["appearance", "language", "voice", "agents", "data-storage"],
             ["scan-terminal", "enter-terminal"],
             ["support-us"],
-            [SettingsIndex.analytics.id],
+            [SettingsIndex.privacySettings.id],
             SettingsIndex.aboutRows.map(\.id),
             ["sign-out"],
         ])
         // What home's search knows is what the page shows, in its order,
-        // with Data and Storage's Connection after Data and Storage.
+        // with Data and Storage's Connection after Data and Storage and
+        // Privacy's Analytics after Privacy.
         var page = Array(settings.shownRowIDs.dropFirst().dropLast().joined())
         page.insert(SettingsIndex.connection.id, at: try XCTUnwrap(page.firstIndex(of: SettingsIndex.dataStorage.id)) + 1)
+        page.insert(SettingsIndex.analytics.id, at: try XCTUnwrap(page.firstIndex(of: SettingsIndex.privacySettings.id)) + 1)
         XCTAssertEqual(SettingsIndex.happyAccount.map(\.id), page)
         for gone in Self.removed { XCTAssertNil(settings.shownRow(gone), "\(gone) is still on the page") }
         // Signing it out is its row's hold too, as Manage Accounts did.
@@ -182,10 +184,10 @@ final class HostedSettingsUnifiedTests: XCTestCase {
 
         XCTAssertEqual(settings.shownRowIDs, [
             ["account:\(computer)", "account:\(happy)", SettingsIndex.connectAgent.id],
-            ["profile"],
+            ["appearance", "profile", "agent-voice", "data-storage"],
             ["support-boba"],
-            ["appearance", "agent-voice", "agents", "data-storage"],
-            [SettingsIndex.analytics.id],
+            ["agents", "usage"],
+            [SettingsIndex.privacySettings.id],
             SettingsIndex.aboutRows.map(\.id),
             ["disconnect"],
         ])
@@ -199,6 +201,22 @@ final class HostedSettingsUnifiedTests: XCTestCase {
         XCTAssertNil(settings.shownRow("support-us"))
 
         try await capture(window, "settings-computer")
+        withExtendedLifetime((navigation, account)) {}
+    }
+
+    /// Usage closes Agents on every agent connection and pushes its page.
+    func testUsageOpensFromAComputersPage() async throws {
+        let (account, context, computers) = try await rig(computers: 1)
+        let settings = SettingsViewController(context: context, computer: try XCTUnwrap(computers.first))
+        let (navigation, _) = try await host(settings)
+        let shown = try await until { settings.shownRow(SettingsIndex.usage.id) != nil }
+        XCTAssertTrue(shown, "no Usage row: \(settings.shownRowIDs)")
+        XCTAssertEqual(settings.shownRow(SettingsIndex.usage.id)?.title, "Usage")
+        settings.tapRow(SettingsIndex.usage.id)
+        let opened = try await until { navigation.topViewController is UsageViewController && navigation.transitionCoordinator == nil }
+        XCTAssertTrue(opened, "Usage didn't open: \(String(describing: navigation.topViewController))")
+        XCTAssertEqual(navigation.topViewController?.title, "Usage")
+        XCTAssertTrue(SettingsIndex.computer.contains(SettingsIndex.usage), "search doesn't find it")
         withExtendedLifetime((navigation, account)) {}
     }
 

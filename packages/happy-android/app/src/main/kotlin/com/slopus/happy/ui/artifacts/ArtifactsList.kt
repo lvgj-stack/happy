@@ -88,6 +88,7 @@ object ArtifactsTags {
     const val PREVIEW = "artifacts.preview"
     const val MENU_OPEN = "artifacts.menu.open"
     const val MENU_COPY = "artifacts.menu.copy"
+    const val MENU_LINK = "artifacts.menu.link"
     const val NOTE = "artifacts.note"
 }
 
@@ -195,6 +196,7 @@ fun rememberArtifactListWords(): ArtifactListWords {
         "image_series" to stringResource(R.string.artifact_kind_image_series),
         "video" to stringResource(R.string.artifact_kind_video),
         "document" to stringResource(R.string.artifact_kind_document),
+        "gen_ui" to stringResource(R.string.artifact_kind_gen_ui),
     )
     val live = stringResource(R.string.artifact_kind_live)
     val unknown = stringResource(R.string.artifact_kind_unknown)
@@ -268,6 +270,7 @@ internal fun artifactTile(artifact: ArtifactSummary): Pair<Ionicon, RowTile> = w
     artifact.type == "image" -> Ionicon.ImageOutline to RowTile.Orange
     artifact.type == "image_series" -> Ionicon.AlbumsOutline to RowTile.Orange
     artifact.type == "video" -> Ionicon.FilmOutline to RowTile.Red
+    artifact.type == "gen_ui" -> Ionicon.CodeWorkingOutline to RowTile.Teal
     else -> Ionicon.DocumentOutline to RowTile.Indigo
 }
 
@@ -279,8 +282,8 @@ internal fun artifactTile(artifact: ArtifactSummary): Pair<Ionicon, RowTile> = w
  * row is its 16:9 slot ([ArtifactSlot]: the cover, or the kind's glyph
  * or an older daemon's picture itself, [ArtifactThumbnail]), the
  * title on up to two lines, the kind under it and when it changed beside
- * it. A tap opens the artifact on its latest version; a hold offers Open
- * and Copy Title. The bar's search filters by every word of the title or
+ * it. A tap opens the artifact on its latest version; a hold offers Open,
+ * Copy Title and, where the server has an instance id, Copy link to artifact. The bar's search filters by every word of the title or
  * kind. There is no pull to refresh: the catalog keeps itself current
  * ([ArtifactCatalogFeed]). A note in place of the rows stands in the
  * middle of the screen rather than of the room under the bar: centred in
@@ -302,6 +305,8 @@ fun ArtifactsScreen(
     covers: FeedCovers? = null,
     /** The connection's link, debounced: its status stands in the title while it is on its way (iOS `watchHeader`). */
     link: LinkState = LinkState.Online,
+    /** An artifact's share link, for its held row's Copy link to artifact; null where the server has no instance id, and then it isn't offered. */
+    shareLink: (ArtifactSummary) -> String? = { null },
 ) {
     val words = rememberArtifactListWords()
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -357,7 +362,7 @@ fun ArtifactsScreen(
                 when (item) {
                     is ArtifactListItem.Heading -> CardHeading(item.text, item.afterCard)
                     is ArtifactListItem.Note -> ArtifactNote(item, bar, Modifier.fillParentMaxSize())
-                    is ArtifactListItem.Row -> ArtifactRow(item, thumbnails, covers, onOpen)
+                    is ArtifactListItem.Row -> ArtifactRow(item, thumbnails, covers, onOpen, shareLink)
                 }
             }
         }
@@ -385,7 +390,7 @@ private fun ArtifactNote(item: ArtifactListItem.Note, bar: Dp, modifier: Modifie
 }
 
 @Composable
-private fun ArtifactRow(item: ArtifactListItem.Row, thumbnails: ArtifactThumbnails?, covers: FeedCovers?, onOpen: (ArtifactSummary) -> Unit) {
+private fun ArtifactRow(item: ArtifactListItem.Row, thumbnails: ArtifactThumbnails?, covers: FeedCovers?, onOpen: (ArtifactSummary) -> Unit, shareLink: (ArtifactSummary) -> String?) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val colors = HappyTheme.colors
@@ -423,6 +428,17 @@ private fun ArtifactRow(item: ArtifactListItem.Row, thumbnails: ArtifactThumbnai
                     leading = { Icon(Ionicon.CopyOutline, MenuSpec.icon, colors.text) },
                     modifier = Modifier.testTag(ArtifactsTags.MENU_COPY),
                 )
+                shareLink(item.artifact)?.let { link ->
+                    HappyMenuItem(
+                        stringResource(R.string.share_link_copy_artifact),
+                        onClick = {
+                            menu = false
+                            if (copyToClipboard(context, link)) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                        },
+                        leading = { Icon(Ionicon.LinkOutline, MenuSpec.icon, colors.text) },
+                        modifier = Modifier.testTag(ArtifactsTags.MENU_LINK),
+                    )
+                }
             }
         },
     )

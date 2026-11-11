@@ -9,6 +9,7 @@ import com.slopus.happy.accounts.RnServerConfigImporter
 import com.slopus.happy.accounts.accountId
 import com.slopus.happy.call.CallController
 import com.slopus.happy.agent.AgentSessions
+import com.slopus.happy.agent.StartupLink
 import com.slopus.happy.analytics.Analytics
 import com.slopus.happy.analytics.AnalyticsAgent
 import com.slopus.happy.analytics.AnalyticsBuild
@@ -43,6 +44,7 @@ import com.slopus.happy.config.ServerConfig
 import com.slopus.happy.data.HappyDatabase
 import com.slopus.happy.data.HappyStore
 import com.slopus.happy.data.LocalCaches
+import com.slopus.happy.diagnostics.Timing
 import com.slopus.happy.model.settings.LanguageController
 import com.slopus.happy.model.settings.SettingsRepository
 import com.slopus.happy.net.ConnectionStatus
@@ -62,7 +64,9 @@ import com.slopus.happy.connection.ServerSignInFlow
 import com.slopus.happy.connection.CloudAccount
 import com.slopus.happy.connection.HappyCloud
 import com.slopus.happy.connection.TailcatTransport
+import com.slopus.happy.connection.agentTransport
 import com.slopus.happy.connection.networkPath
+import com.slopus.happy.connection.defaultNetwork
 import com.slopus.happy.sync.AccountSync
 import com.slopus.happy.sync.SessionFileCache
 import com.slopus.happy.ui.changelog.ChangelogReadMarker
@@ -88,6 +92,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -121,13 +126,25 @@ class AppGraph(
     defaultServerUrl: String,
     secureStoreKeys: SecureStoreKeys = AndroidKeyStoreKeys(strongBox = AndroidKeyStoreKeys.hasStrongBox(context)),
     databaseName: String? = HappyDatabase.NAME,
+    /** The open agent connection's tunnel, already on its way since the process started; its session takes it. */
+    private val startup: StartupLink? = null,
 ) {
     private val appContext: Context = context.applicationContext ?: context
+
+    private val services = HashMap<Any, Any>()
+
+    /**
+     * The one [make] of this graph under [key], living as long as the graph
+     * does. Services kept per graph live here, not in a static map keyed by
+     * the graph: a value there holds its graph, so the graph was never let go.
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> service(key: Any, make: () -> T): T = synchronized(services) { services[key] as T? ?: make().also { services[key] = it } }
 
     init {
         // Before accounts had databases of their own. Local data resets rather than migrates.
         if (databaseName != null) appContext.deleteDatabase(HappyDatabase.NAME)
-        TailcatTransport.persistDerpMap(File(appContext.noBackupFilesDir, "tailcat/derpmap.json"))
+        TailcatTransport.persistDerpMap(StartupLink.derpMapFile(appContext))
     }
 
     val serverConfig = ServerConfig(
@@ -138,6 +155,9 @@ class AppGraph(
 
     /** Animated Avatars, kept on this phone for every account (not cleared with local settings). */
     val liveAvatars = LiveAvatarsSetting(context.getSharedPreferences(LiveAvatarsSetting.PREFS_NAME, Context.MODE_PRIVATE))
+
+    /** Group tool calls in Happy Agent chats, kept on this phone for every connection (not cleared with local settings). */
+    val toolCallsGrouped = com.slopus.happy.config.ToolCallsGroupedSetting(context.getSharedPreferences(com.slopus.happy.config.ToolCallsGroupedSetting.PREFS_NAME, Context.MODE_PRIVATE))
 
     /** Where Happy account [publicId] keeps its attachments for good, a folder of its own (no backup: the server has them); gone with its sign-out. */
     fun legacyMediaDirectory(publicId: String?): File? =
@@ -250,6 +270,18 @@ class AppGraph(
     val store = HappyStore(database(openAccountId()))
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Stops everything the graph runs. It ends with its application, which
+     * only a test process ends (Robolectric, after each test); a graph left
+     * running there lived to the end of the suite in its pending delays (a
+     * socket's timeout, a retry), with its whole app.
+     */
+    fun close() = scope.cancel()
+
+    init {
+        (appContext as? HappyApplication)?.whenTerminated(::close)
+    }
 
     /** The account's synced settings; a change is uploaded by the next sync. */
     val settings = SettingsRepository(store, scope, onChanged = ::requestSync)
@@ -367,9 +399,13 @@ class AppGraph(
         CloudAccount(
             scope = scope,
             origin = origin,
+            api = HappyCloud.api ?: return@let null,
             auth = serverAuth,
             http = okHttp,
         )
+    }?.also { account ->
+        // Cloud servers signed in by an earlier build refresh at the accounts service, which no longer does: ended now, signed in again from their home.
+        scope.launch { agentConnections.endSessions { connection, credential -> HappyCloud.isServer(connection.server) && credential.refreshToken != null && !account.issued(credential) } }
     }
 
     /**
@@ -591,7 +627,11 @@ class AppGraph(
         started = (started + if (value) 1 else -1).coerceAtLeast(0)
         val was = foreground.value
         foreground.value = started > 0
-        if (was && !foreground.value) agentSessions.backgrounded()
+        if (!was && foreground.value) Timing.foreground()
+        if (was && !foreground.value) {
+            Timing.mark("background")
+            agentSessions.backgrounded()
+        }
     }
 
     /** Each agent connection's live link and cached home (AgentSessions). */
@@ -602,9 +642,14 @@ class AppGraph(
         stagedFiles = File(appContext.cacheDir, com.slopus.happy.conversation.MediaFiles.DIRECTORY),
         openId = openAgentId,
         foreground = isForeground,
-        network = appContext.networkPath(),
+        network = appContext.defaultNetwork(),
         chime = CompletionChime(appContext)::play,
-    )
+        makeTransport = { startup?.take(it) ?: agentTransport(it.address, it.port, it.publicUrl, it.tailcatAvailable != false) },
+        toolCallsGrouped = toolCallsGrouped.enabled,
+    ).also { startup?.follow(openAgentId, agentConnections.accounts) }
+
+    /** This installation's id: the push relay's `deviceId`, and the device environment reports name. */
+    private val installationId = com.slopus.happy.push.InstallationId(appContext)
 
     val cloudPush = com.slopus.happy.push.CloudPushRuntime(
         appContext, agentConnections, { agentSessions.session(it)?.client }, isForeground, scope,
@@ -613,7 +658,13 @@ class AppGraph(
             keys = secureStoreKeys,
             keychainService = com.slopus.happy.push.CloudPushRuntime.KEYCHAIN_SERVICE,
         ),
+        installationId,
     )
+
+    /** Each computer that takes it is told this phone's time zone and language. */
+    private val userEnvironment = com.slopus.happy.agent.UserEnvironmentRuntime(
+        appContext, openAgentId, isForeground, { agentSessions.session(it)?.client }, installationId, scope,
+    ).also { it.start() }
 
     init {
         analyticsTarget?.let(::startAnalytics)

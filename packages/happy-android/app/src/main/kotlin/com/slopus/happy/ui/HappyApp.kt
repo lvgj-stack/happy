@@ -156,7 +156,7 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
             val happyLinks = rememberHappyLinks(graph, nav, agent)
             // Every scanner, signed in or out, sends happy://direct? codes here.
             CompositionLocalProvider(LocalAgentPairing provides connectAgent, LocalServerSignIn provides signInToServer, LocalHappyLinks provides happyLinks) {
-              // The account menu's Happy Cloud (and Add's ⋮): confirm, then sign in to the compiled-in team server.
+              // Happy Cloud: the first screen's Use Happy Cloud and the account menu's row.
               val cloud = rememberCloudConnect(graph, nav)
               // Add (the first screen's Connect, the account menu's Add): scan, then route the code.
               val add = rememberAddFlow(
@@ -164,7 +164,6 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
                   onRestore = { nav.navigate(RestoreRoute) },
                   onServer = { nav.navigate(ServerRoute) },
                   serverLabel = rememberCustomServerLabel(graph),
-                  onCloud = cloud,
               )
               CompositionLocalProvider(LocalAddFlow provides add, LocalCloudConnect provides cloud) {
                 // Links: through the open agent connection in its browser, or as ever on a Happy account.
@@ -185,6 +184,8 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
                                 onOpenArtifacts = { go.open(MainPanelKey.ARTIFACTS) { nav.navigate(AgentArtifactsRoute(account.id)) } },
                                 onOpenSurface = { go.open(MainPanelKey.surface(it.id)) { nav.openSurface(graph, account.id, it.id) } },
                                 onOpenTodos = { go.open(MainPanelKey.TODOS) { nav.navigate(com.slopus.happy.ui.todos.TodoListsRoute(account.id)) } },
+                                onOpenPlugins = { go.open(MainPanelKey.PLUGINS) { nav.navigate(com.slopus.happy.ui.plugins.PluginsRoute(account.id)) } },
+                                onOpenPipelines = { go.open(MainPanelKey.PIPELINES) { nav.navigate(com.slopus.happy.ui.pipelines.PipelinesRoute(account.id)) } },
                                 onOpenArtifact = { go.open(null) { nav.openArtifact(account.id, it) } },
                                 onOpenFeed = { go.open(MainPanelKey.FEED) { nav.navigate(AgentFeedRoute(account.id)) } },
                                 onOpenVaultItem = { surfaceId, itemId, folder, name ->
@@ -209,6 +210,7 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
                 TabletShell(graph, nav, hasHome = open != OpenAccount.None, sidebar = home) {
                     // Inside the shell: on the split, what the call opens is the main panel's new root.
                     CallScreenEffect(graph.calls, nav, agent)
+                    com.slopus.happy.ui.gates.CloudOnboardingEffect(graph, nav, agent)
                     SessionEndedEffect(graph, nav, agent)
                     val start: Any = if (open == OpenAccount.None) StartRoute else HomeRoute
                     val motion = rememberNavMotion()
@@ -236,7 +238,11 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
                     }
                 }
                 }
-                DeepLinkEffect(nav, signedIn = signedIn, onOpenSession = { id -> nav.navigate(SessionRoute(id)) }, openConnection = agent, onHappyLink = happyLinks::take)
+                DeepLinkEffect(
+                    nav, signedIn = signedIn, onOpenSession = { id -> nav.navigate(SessionRoute(id)) }, openConnection = agent, onHappyLink = happyLinks::take,
+                    // A terminal link while no Happy account is open: the one it goes to opens, as from home's account menu.
+                    openHappyAccount = { graph.accountStore.registry.value.forTerminal()?.id?.also(switcher::fromHome) != null },
+                )
               }
             }
             PushRegistrationEffect(graph)
@@ -282,14 +288,17 @@ private fun rememberStackGeneration(open: OpenAccount, keep: () -> Boolean): Int
 @Composable
 private fun rememberLinks(graph: AppGraph, nav: NavHostController, agent: String?): LinkOpener {
     val context = LocalContext.current
+    // A Happy URL in the connection's screens opens in the app (LocalHappyLinks, provided just above).
+    val happy = LocalHappyLinks.current
     if (agent == null) {
         val system = LocalUriHandler.current
         val dark = HappyTheme.colors.dark
-        return remember(system, dark) { LinkOpener.legacy(context, system, dark) }
+        // A share link opens on its own agent connection, or says it isn't one of this phone's.
+        return remember(system, dark, happy) {
+            LinkOpener.legacy(context, system, dark) { url -> com.slopus.happy.agent.HappyShareLinks.parse(url) != null && happy?.open(url, "") == true }
+        }
     }
     val computer = computerName(graph, agent)
-    // A Happy URL in the connection's screens opens in the app (LocalHappyLinks, provided just above).
-    val happy = LocalHappyLinks.current
     return remember(nav, agent, computer, happy) {
         LinkOpener.agent(
             context, computer,

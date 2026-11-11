@@ -9,7 +9,7 @@ import UltraView
 /// the previous seven and thirty days, then by month), newest first. It
 /// opens on the list it last showed, kept on the phone by the account's
 /// catalog (`SyncEngine.artifacts`, which follows its events and reads it
-/// whole after a gap). The bar's search filters by title and kind. A row opens the artifact viewer on the latest version.
+/// whole after a gap), read again as it opens. The bar's search filters by title and kind. A row opens the artifact viewer on the latest version.
 final class ArtifactsViewController: UIViewController, UISearchResultsUpdating {
     private let session: Session
     private let feed: ArtifactCatalogFeed
@@ -81,6 +81,8 @@ final class ArtifactsViewController: UIViewController, UISearchResultsUpdating {
                 return true
             }
             await feed.start()
+            // Read whenever the screen opens, connected or not.
+            await feed.refresh()
         }
         registerForTraitChanges(UIView.textSizeTraits + [UITraitUserInterfaceStyle.self, UITraitDisplayScale.self]) { (self: Self, _) in
             self.updateInput()
@@ -187,10 +189,11 @@ final class ArtifactsViewController: UIViewController, UISearchResultsUpdating {
     private func menu(_ id: String) -> UIMenu? {
         guard let artifact = artifacts[id] else { return nil }
         let title = artifact.title.isEmpty ? Strings.untitledArtifact : artifact.title
+        let link = CopyLinkItem.action(.reference(.init(kind: .artifact, id: id)), instanceId: session.instanceId, identifier: "artifact-copy-link")
         return UIMenu(children: [
             UIAction(title: Strings.Artifacts.open, image: Glyphs.image("chevron-forward", size: 20)) { [weak self] _ in self?.open(id) },
             UIAction(title: Strings.Artifacts.copyTitle, image: Glyphs.image("copy-outline", size: 20)) { _ in UIPasteboard.general.string = title },
-        ])
+        ] + [link].compactMap { $0 })
     }
 
     /// A row's picture, still: the daemon's preview of its cover, else of

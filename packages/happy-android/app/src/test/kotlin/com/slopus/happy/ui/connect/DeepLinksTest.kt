@@ -54,6 +54,21 @@ class DeepLinksTest {
         assertEquals(DeepLink.GuestInvite(link), DeepLinks.pending.value)
     }
 
+    /** A Happy Cloud invite opens its Join screen, from the build's invite host; its token never prints. */
+    @Test
+    fun aCloudInviteOpensItsJoinScreen() {
+        val token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcde"
+        val host = com.slopus.happy.connection.HappyCloud.inviteHost!!
+        val link = "https://$host/#$token"
+        val invite = DeepLink.CloudServerInvite(com.slopus.happy.connection.CloudInvite(token))
+        assertEquals(invite, parseDeepLink(link))
+        assertEquals(invite, parseDeepLink("https://${com.slopus.happy.connection.HappyCloud.webHost}/join#$token"))
+        assertEquals("CloudServerInvite(invite=CloudInvite(…))", parseDeepLink(link).toString())
+        assertNull(parseDeepLink("https://$host/#short"))
+        assertTrue(DeepLinks.offer(Intent(Intent.ACTION_VIEW, Uri.parse(link))))
+        assertEquals(invite, DeepLinks.pending.value)
+    }
+
     @Test
     fun theTerminalSchemeOpensTheConfirmScreen() {
         assertEquals(DeepLink.Terminal(key), parseDeepLink("happy://terminal?$key"))
@@ -115,6 +130,21 @@ class DeepLinksTest {
         // The mobile routes are untouched.
         assertEquals(DeepLink.Session("s1"), parseDeepLink("happy://session/s1"))
         assertEquals(DeepLink.Screen(SettingsRoute()), parseDeepLink("happy://settings"))
+    }
+
+    @Test
+    fun shareLinksOpenAsTheInstanceLinkTheyCarry() {
+        val instance = "k3x9q2m7p0a4b8c1d5e6f7g2"
+        assertEquals(
+            DeepLink.Instance(instance, com.slopus.happy.agent.HappyLink.Reference(com.slopus.happy.agent.HappyReferenceKind.Agent, "t1")),
+            parseDeepLink("https://link.happy.page/#1/$instance/agents/t1?as=task"),
+        )
+        // Outside the grammar, or with no instance, it is the web's and nothing here opens it.
+        listOf(
+            "https://link.happy.page/#1/agents/t1",
+            "https://link.happy.page/#1/$instance/agents/t1?title=Plan",
+            "https://link.happy.page/",
+        ).forEach { assertNull(it, parseDeepLink(it)) }
     }
 
     @Test

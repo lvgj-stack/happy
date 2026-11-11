@@ -3,10 +3,11 @@ package com.slopus.happy.connection
 import com.slopus.happy.BuildConfig
 
 /**
- * Happy Cloud (accounts contract v1): the accounts service at its own
- * origin, [BuildConfig.HAPPY_CLOUD_ACCOUNTS], where the person signs in and
- * their servers are listed, and the servers under one domain,
- * [BuildConfig.HAPPY_CLOUD_BASE]: the server named `acme` is
+ * Happy Cloud (accounts split, contract v1): the accounts service at its
+ * own origin, [BuildConfig.HAPPY_CLOUD_ACCOUNTS], where the person signs in
+ * for an identity token, the cluster's API at [api], which turns that into
+ * the account's session and lists their servers, and the servers under one
+ * domain, [BuildConfig.HAPPY_CLOUD_BASE]: the server named `acme` is
  * `https://acme.BASE`. The person signs in to their account once, then
  * picks, creates or joins servers; the account gets each server's token
  * ([CloudAccount.serverToken]), and each server is kept as its own
@@ -17,11 +18,24 @@ object HappyCloud {
     /** BASE; null in release builds (`release`, and `bench`, which is release) and when the build's isn't a host. Null leaves out every way in. */
     val base: String? = BuildConfig.HAPPY_CLOUD_BASE.takeIf { offeredIn(BuildConfig.BUILD_TYPE) && serverOf(it, "x") != null }
 
-    /** The accounts service, where the account signs in and servers are listed; null wherever [base] is. */
+    /** The accounts service, where the account signs in for an identity token; null wherever [base] is. */
     val accounts: AgentOrigin? = base?.let { originOf(BuildConfig.HAPPY_CLOUD_ACCOUNTS) }
+
+    /**
+     * The cluster's API ([BuildConfig.HAPPY_CLOUD_API], `https://api.BASE`):
+     * the account's session, its servers and invites, and the token endpoint
+     * every Happy Cloud session refreshes at. Null wherever [base] is.
+     */
+    val api: AgentOrigin? = base?.let { originOf(BuildConfig.HAPPY_CLOUD_API) }
 
     /** The web app's domain, [BuildConfig.HAPPY_CLOUD_WEB]: the server named `acme`'s settings are under `https://acme.WEB/#/settings/`. */
     private val web: String = BuildConfig.HAPPY_CLOUD_WEB
+
+    /** Where invite links live, [BuildConfig.HAPPY_CLOUD_INVITE] (`https://INVITE/#<token>`); null wherever [base] is. */
+    val inviteHost: String? = base?.let { BuildConfig.HAPPY_CLOUD_INVITE.lowercase() }
+
+    /** The web app's own host, for older invite links (`https://WEB/join#<token>`); null wherever [base] is. */
+    val webHost: String? = base?.let { web.lowercase() }
 
     /**
      * [page] of [server]'s settings in the web app, for a settings link to
@@ -29,6 +43,10 @@ object HappyCloud {
      */
     fun webSettings(server: String?, page: String, base: String? = this.base, web: String = this.web): String? =
         handle(server, base)?.let { "https://${it.removePrefix("@")}.$web/#/settings/$page" }
+
+    /** [server] in the web app; null for a server that isn't Happy Cloud's. */
+    fun webApp(server: String?, base: String? = this.base, web: String = this.web): String? =
+        handle(server, base)?.let { "https://${it.removePrefix("@")}.$web/" }
 
     /** Only the dev (`debug`) and `preview` builds offer Happy Cloud. */
     internal fun offeredIn(buildType: String): Boolean = buildType == "debug" || buildType == "preview"
@@ -59,8 +77,15 @@ object HappyCloud {
      * username, until Happy Cloud has its own domain (accounts contract,
      * Display). Null for any other server, which shows its host.
      */
-    fun handle(server: String?, base: String? = this.base): String? =
-        if (isServer(server, base)) "@" + AgentOrigin.parse(server!!).host.removeSuffix(".$base") else null
+    fun handle(server: String?, base: String? = this.base): String? = serverName(server, base)?.let { "@$it" }
+
+    /**
+     * A Happy Cloud server's bare name (`acme`), what its placeholder
+     * picture is picked by on every client (desktop's rail, both phones'
+     * server lists and account menus). Null for any other server.
+     */
+    fun serverName(server: String?, base: String? = this.base): String? =
+        if (isServer(server, base)) AgentOrigin.parse(server!!).host.removeSuffix(".$base") else null
 
     /** This person's connection to [server] already on the phone, if any: the open one first, else the oldest. */
     fun connection(accounts: List<AgentConnection>, server: String, open: String? = null): AgentConnection? =

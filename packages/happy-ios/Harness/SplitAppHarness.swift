@@ -36,17 +36,23 @@ private actor DemoComputer: AgentTransport {
 
     /// With `rounds`, that many more questions and answers after the
     /// four, enough to scroll. `live`, for a live call (`CallLiveCheck`):
-    /// 60 more tasks, three turns in every conversation, the last with
-    /// commentary ahead of its answer, and a reply streamed to each message
-    /// sent, or for Release notes a failure.
+    /// 60 more tasks, four turns in every conversation, the third with
+    /// commentary ahead of its answer and the last a 230-word answer, and a reply streamed to each message
+    /// sent, or for Release notes a failure. `slowReads`, Fixture task
+    /// 30's messages come that many seconds after they are asked for, as from a
+    /// computer slow to answer: the first value until one read is in, the
+    /// next until another is, and so on, the last for the rest.
     private let rounds: Int
     private let live: Bool
     /// `working`: these agents think, their last turn still running.
     private let working: Set<String>
-    init(rounds: Int = 0, live: Bool = false, working: Set<String> = []) {
+    private let slowReads: [Double]
+    private var slowReadsDone = 0
+    init(rounds: Int = 0, live: Bool = false, working: Set<String> = [], slowReads: [Double] = []) {
         self.rounds = rounds
         self.live = live
         self.working = working
+        self.slowReads = slowReads
     }
 
     private func status(_ agentId: String) -> String { working.contains(agentId) ? "thinking" : "idle" }
@@ -75,6 +81,9 @@ private actor DemoComputer: AgentTransport {
         run("r2", 1_600, 2_000, [message("u2", "user", 3, "And when the sidebar is hidden?"),
                                  message("c2", "agent", 3.5, "Let me check how the sidebar hides."),
                                  message("m2", "agent", 4, "The main panel takes the whole window, and the transcript stays centred at its readable width.")]),
+        // A reply long enough to be cut when a read asks for few words.
+        run("r3", 2_100, 2_600, [message("u3", "user", 5, "What's left on the release checklist?"),
+                                 message("m3", "agent", 6, (1...12).map { "Step \($0): check item \($0) of the release, note who owns it, and confirm it is done before the build goes out." }.joined(separator: " "))]),
     ]
 
     private func history(_ agentId: String) -> [JSONValue] {
@@ -115,7 +124,14 @@ private actor DemoComputer: AgentTransport {
         ]),
     ])
 
-    func request(method: String, path: String, credential: String, body: Data?, headers: [String: String]) throws -> HTTP1Response {
+    func request(method: String, path: String, credential: String, body: Data?, headers: [String: String]) async throws -> HTTP1Response {
+        if let delay = slowReads.isEmpty ? nil : slowReads[min(slowReadsDone, slowReads.count - 1)],
+           path.hasPrefix("/v0/agents/fixture30-agent/messages?") {
+            print("[computer] reading Fixture task 30 slowly, \(delay) s")
+            try? await Task.sleep(for: .seconds(delay))
+            slowReadsDone += 1
+            print("[computer] read Fixture task 30")
+        }
         var value: JSONValue
         if path == "/v0/bootstrap/desktop" {
             var home = Self.home
@@ -245,9 +261,13 @@ private actor DemoComputer: AgentTransport {
 /// would) instead of asking a computer that is offline.
 private struct SplitComposeMachine: HomeOps, HomeSessionOps {
     static let sessionId = "split-compose-session"
+    /// How long the computer takes to make it (`-tabTour`: long enough to
+    /// see the strip's stand-in).
+    nonisolated(unsafe) static var spawnDelay: Duration = .zero
     let store: LocalStore
 
     func machineSpawnNewSession(options: SpawnSessionOptions) async -> SpawnSessionResult {
+        try? await Task.sleep(for: Self.spawnDelay)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let record = SessionRecord(
             id: Self.sessionId, seq: 0, createdAt: now, updatedAt: now, active: true, activeAt: now, projectId: nil,
@@ -275,20 +295,23 @@ private struct SplitComposeMachine: HomeOps, HomeSessionOps {
     func uploadSessionBlob(sessionId: String, name: String, bytes: Data) async throws -> (ref: String, size: Int) { throw URLError(.cannotConnectToHost) }
 
     @MainActor static func install() {
-        LegacyComposeStart.makeStarter = { account in
-            let machine = SplitComposeMachine(store: account.store)
-            return SessionStarter(environment: .init(
-                ops: machine,
-                sessionOps: machine,
-                sender: account.sender,
-                metadataTransport: account.realtime,
-                saveInitialModes: { [sender = account.sender] in try await sender.saveInitialModes(sessionId: $0, patch: $1) },
-                refreshSessions: {},
-                paintBotFace: { _ in throw URLError(.cannotConnectToHost) },
-                attachmentPlan: { [sender = account.sender] message, sessionId in try await sender.attachmentPlan(for: message, sessionId: sessionId) },
-                spawnRequests: account.spawnRequests
-            ))
-        }
+        LegacyComposeStart.makeStarter = { starter(account: $0, spawnRequests: $0.spawnRequests) }
+        // The strip's `+` too.
+        ChatPendingStarts.makeStarter = { starter(account: $0, spawnRequests: $1) }
+    }
+
+    @MainActor private static func starter(account: AccountSession, spawnRequests: SpawnRequests) -> SessionStarter {
+        let machine = SplitComposeMachine(store: account.store)
+        return SessionStarter(environment: .init(
+            ops: machine,
+            sessionOps: machine,
+            sender: account.sender,
+            metadataTransport: account.realtime,
+            saveInitialModes: { [sender = account.sender] in try await sender.saveInitialModes(sessionId: $0, patch: $1) },
+            refreshSessions: {},
+            attachmentPlan: { [sender = account.sender] message, sessionId in try await sender.attachmentPlan(for: message, sessionId: sessionId) },
+            spawnRequests: spawnRequests
+        ))
     }
 }
 
@@ -308,13 +331,19 @@ private struct SplitComposeMachine: HomeOps, HomeSessionOps {
 /// (`PageScrollProbe`), `-long` gives the agent's conversation 60 more
 /// rounds, `-composeMachine` lets compose's first send make a session on
 /// the seeded computer (`SplitComposeMachine`), `-callLive <directory>`
-/// talks to the build's hosted voice agent from files (`CallLiveCheck`).
+/// talks to the build's hosted voice agent from files (`CallLiveCheck`; a
+/// relative directory is in the app's Documents), `-slowReads <seconds,…>`
+/// has the computer that long reading Fixture task 30.
 /// `-working` has iPad split view, Ship the cache and Research Assistant
 /// think, `-lowPower` stands in for Low Power Mode with Shimmer in Low
 /// Power Mode off (on with `-shimmerInLowPower`; `ShimmerClock`), `-shimmerAfter <seconds>` turns that
 /// on as its Settings row does, and `-lowPowerTour` shows home, finds
 /// Shimmer in Low Power Mode in Settings' search, flips its switch and
-/// goes home again, a pause between each.
+/// goes home again, a pause between each. `-tabTour`, with `-open` on a
+/// worktree chat, switches between its tabs, a draft typed in one and the
+/// keyboard up, and then opens a new one with `+` that the seeded computer
+/// makes (`SplitComposeMachine`), as a finger on the strip would, then
+/// goes home and opens a tab again, a pause between each (`[tab-tour]`).
 @MainActor
 final class SplitAppHarness {
     private var coordinator: AppCoordinator?
@@ -332,13 +361,16 @@ final class SplitAppHarness {
         let agent = arguments.contains("-agent")
         #if DEBUG
         if let directory = option("-callLive") {
-            do { liveCall = try CallLiveCheck(directory: URL(fileURLWithPath: directory)) }
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            do { liveCall = try CallLiveCheck(directory: directory.hasPrefix("/") ? URL(fileURLWithPath: directory) : documents.appendingPathComponent(directory)) }
             catch { print("[call-live] \(error)") }
         }
         #endif
-        if arguments.contains("-composeMachine") { SplitComposeMachine.install() }
+        if arguments.contains("-composeMachine") || arguments.contains("-tabTour") { SplitComposeMachine.install() }
+        if arguments.contains("-tabTour") { SplitComposeMachine.spawnDelay = .seconds(1.5) }
         let computer = DemoComputer(rounds: arguments.contains("-long") ? 60 : 0, live: option("-callLive") != nil || arguments.contains("-voiceTouch"),
-                                    working: arguments.contains("-working") ? ["ipad-agent", "cache-agent", "research-agent"] : [])
+                                    working: arguments.contains("-working") ? ["ipad-agent", "cache-agent", "research-agent"] : [],
+                                    slowReads: (option("-slowReads") ?? "").split(separator: ",").compactMap { Double($0) })
         if arguments.contains("-lowPower") {
             ShimmerClock.shared.lowPowerOverride = true
             ShimmerClock.shared.shimmersInLowPower = arguments.contains("-shimmerInLowPower")
@@ -418,8 +450,12 @@ final class SplitAppHarness {
                 try? await Task.sleep(for: .milliseconds(500))
                 shell.setSidebarHidden(true)
             }
+            if arguments.contains("-attachPreviewTour") {
+                await AttachPreviewTour.run(window: window, caption: option("-caption") ?? "A caption long enough to wrap onto a second line here")
+            }
             if arguments.contains("-resizeLoop") { await Self.resizeLoop(window) }
             if arguments.contains("-lowPowerTour") { await Self.lowPowerTour(window: window, home: home, context: context) }
+            if arguments.contains("-tabTour") { await Self.tabTour(shell: shell, home: home, context: context) }
             #if DEBUG
             if arguments.contains("-callTour") { await Self.callTour(shell: shell, home: home, context: context, agent: agent) }
             // The call's opens one after another, then from Settings: each logs the stack it left (`[call] stack`).
@@ -642,6 +678,59 @@ final class SplitAppHarness {
         try? await Task.sleep(for: .seconds(1.5))
         navigation?.popToRootViewController(animated: true)
         print("[low-power] home again")
+    }
+
+    /// The open chat's strip tapped tab by tab, then its `+`.
+    private static func tabTour(shell: ShellViewController, home: UIViewController, context: AppContext) async {
+        func strip() -> ChatWorktreeTabStrip? {
+            func find(_ view: UIView) -> ChatWorktreeTabStrip? {
+                if let strip = view as? ChatWorktreeTabStrip { return strip }
+                return view.subviews.lazy.compactMap(find).first
+            }
+            return shell.topViewController.flatMap { find($0.view) }
+        }
+        func card() -> AgentInputCardView? {
+            func find<T: UIView>(_ view: UIView, _ shown: (T) -> Bool) -> T? {
+                if let match = view as? T, shown(match) { return match }
+                for child in view.subviews {
+                    if let match = find(child, shown) { return match }
+                }
+                return nil
+            }
+            // The composer shown: the tab left's until the new tab's is in.
+            let composer: SessionComposerView? = shell.topViewController.flatMap { find($0.view) { $0.alpha > 0 } }
+            return composer.flatMap { find($0) { (_: AgentInputCardView) in true } }
+        }
+        func select(_ id: String) async {
+            print("[tab-tour] select \(id)")
+            strip()?.onSelect?(id)
+            try? await Task.sleep(for: .seconds(1.2))
+        }
+        try? await Task.sleep(for: .seconds(1.5))
+        await select("seeded-tab-3")
+        // A draft in this tab, typed with the keyboard up.
+        card()?.textView.becomeFirstResponder()
+        try? await Task.sleep(for: .seconds(0.8))
+        card()?.textView.insertText("A draft that stays with Opening a chat")
+        print("[tab-tour] typed")
+        try? await Task.sleep(for: .seconds(1))
+        await select("seeded-tab-1")
+        await select("seeded-tab-3")
+        card()?.textView.resignFirstResponder()
+        try? await Task.sleep(for: .seconds(0.8))
+        for id in ["seeded-tab-4", "seeded-tab-2"] { await select(id) }
+        print("[tab-tour] new tab")
+        strip()?.onAdd?()
+        try? await Task.sleep(for: .seconds(3.5))
+        // Back home and into a tab again, as a finger would: the header
+        // names the checkout from the push's first frame.
+        print("[tab-tour] back")
+        home.navigationController?.popToRootViewController(animated: true)
+        try? await Task.sleep(for: .seconds(1.5))
+        print("[tab-tour] push")
+        home.push(.session(id: "seeded-tab-1"), context: context, animated: true)
+        try? await Task.sleep(for: .seconds(2))
+        print("[tab-tour] done")
     }
 
     private static func open(_ id: String, from home: UIViewController, context: AppContext, agent: Bool, animated: Bool = false) {

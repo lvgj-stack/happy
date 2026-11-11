@@ -6,9 +6,6 @@ import com.slopus.happy.chat.str
 import com.slopus.happy.connection.AgentConnectionException
 import com.slopus.happy.connection.RequestCategory
 import com.slopus.happy.connection.TransportResponse
-import com.slopus.happy.conversation.ui.QuickReply
-import com.slopus.happy.conversation.ui.UiAction
-import com.slopus.happy.conversation.ui.UiOffer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -33,8 +30,8 @@ typealias AgentRequest = suspend (method: String, path: String, body: JsonElemen
 /** [AgentRequest] with a JSON body already made as bytes: a workspace file's upload, built once ([WorkspaceUploads.body]). */
 typealias AgentBytesRequest = suspend (method: String, path: String, body: ByteArray, category: RequestCategory) -> TransportResponse
 
-/** A file's own bytes as the body, sent as [contentType]: a Happy Cloud attachment's upload. */
-typealias AgentFileRequest = suspend (method: String, path: String, body: ByteArray, contentType: String) -> TransportResponse
+/** A file's own bytes as the body, with its `Content-Type` (and `Content-Range`) in [headers]: an attachment's upload. */
+typealias AgentFileRequest = suspend (method: String, path: String, body: ByteArray, headers: Map<String, String>) -> TransportResponse
 
 /**
  * The client-chosen ids of new work made on first send (`POST /v0/tasks` or
@@ -78,6 +75,12 @@ open class ConversationApi(
     private val cloud: Boolean = false,
     /** Sends [uploadAttachment]'s bytes; without it they go as [request] can't, and the upload fails. */
     private val fileRequest: AgentFileRequest? = null,
+    /**
+     * The device a send names (`deviceId`), once the computer takes this
+     * device's environment ([com.slopus.happy.agent.UserEnvironmentReports.sendingDeviceId]):
+     * an older one refuses the whole send.
+     */
+    private val sendingDevice: () -> String? = { null },
 ) {
     constructor(request: AgentRequest) : this(null, request)
 
@@ -150,24 +153,24 @@ open class ConversationApi(
         mode: Mode,
         toolRequest: ToolRequest? = null,
         attachments: List<SentAttachment> = emptyList(),
-        /** The suggested reply [text] is, exactly: the daemon checks it, and answers `400` where it isn't. */
-        quickReply: QuickReply? = null,
     ): Message? {
         val body = buildJsonObject {
             put("id", id)
             // The API requires top-level text; a picture or a file alone goes with a short caption.
+            val pictures = images.size + attachments.count { it.picture }
+            val files = attachments.count { !it.picture }
             put(
                 "text",
                 when {
                     text.isNotEmpty() -> text
-                    images.isNotEmpty() && attachments.isEmpty() -> if (images.size == 1) "Attached image." else "Attached images."
-                    attachments.isNotEmpty() -> if (images.size + attachments.size == 1) "Attached file." else "Attached files."
+                    pictures > 0 && files == 0 -> if (pictures == 1) "Attached image." else "Attached images."
+                    files > 0 -> if (pictures + files == 1) "Attached file." else "Attached files."
                     else -> text
                 },
             )
             put("delivery", "steer")
             put("clientMetadata", buildJsonObject { put("composer", "mobile") })
-            quickReply?.let { put("quickReply", it.json()) }
+            sendingDevice()?.let { put("deviceId", it) }
             if (images.isNotEmpty() || attachments.isNotEmpty() || toolRequest != null) put("content", buildJsonArray {
                 images.forEach { add(buildJsonObject { put("type", "image"); put("mimeType", it.mimeType); put("data", it.data) }) }
                 attachments.forEach { add(buildJsonObject { put("type", "file"); put("attachment", it.id); put("name", it.name) }) }
@@ -190,26 +193,6 @@ open class ConversationApi(
     }
 
     /**
-     * One press of a chat UI component, to `POST /v0/agents/:agentId/actions`
-     * under the client's [id], the attempt's idempotency key: the same id
-     * again answers what the first did. The answer is the attempt's record,
-     * a service message of one `action` block; a refusal on its merits is a
-     * record whose outcome is `rejected`, while `400`, `403`, `404`, `409`
-     * and `429` record nothing. Its `result` is not read: no action this
-     * build sends answers with one.
-     */
-    open suspend fun act(agentId: String, id: String, offer: UiOffer, action: UiAction): Message {
-        val body = buildJsonObject {
-            put("id", id)
-            put("messageId", offer.messageId)
-            put("uiId", offer.uiId)
-            put("componentId", offer.componentId)
-            put("action", action.json())
-        }
-        return Message.parse(call("POST", "/v0/agents/${escape(agentId)}/actions", body)["record"])?.takeIf { it.attempt != null } ?: throw invalid()
-    }
-
-    /**
      * Uploads [file] as an attachment of [agentId] (Happy Cloud, `PUT
      * …/attachments?name=`): its own bytes, as its type. The answer's id is
      * the bytes' digest, so a retry whose answer was lost gets the same one.
@@ -220,9 +203,19 @@ open class ConversationApi(
         val bytes = kotlinx.coroutines.withContext(io) { file.file.readBytes() }
         val path = "/v0/agents/${escape(agentId)}/attachments?name=${escape(file.name)}"
         val response = kotlinx.coroutines.withContext(com.slopus.happy.connection.BodyProgress { _, _ -> }) {
-            send("PUT", path, bytes, file.mimeType.ifBlank { "application/octet-stream" })
+            send("PUT", path, bytes, mapOf("Content-Type" to file.mimeType.ifBlank { "application/octet-stream" }))
         }
         return decode(response)["attachment"].obj?.get("id").str ?: throw invalid()
+    }
+
+    /**
+     * Uploads [file] as an attachment of [agentId] ([AttachmentUploads]),
+     * hashed first and resumed from what the computer holds; its id. A
+     * computer without the route is [AttachmentRouteMissing].
+     */
+    open suspend fun attach(agentId: String, file: OutgoingFile, io: kotlin.coroutines.CoroutineContext, retryDelayMillis: Long, sent: (Long) -> Unit = {}): String {
+        val send = fileRequest ?: throw AttachmentRouteMissing()
+        return AttachmentUploads(send, retryDelayMillis, io).upload(agentId, file, sent)
     }
 
     /**
@@ -351,9 +344,9 @@ open class ConversationApi(
         call("POST", "/v0/agents/${escape(agentId)}/question/${escape(questionId)}/answer", body)
     }
 
-    /** The bytes of one item a tool call presented (`media` presentation). */
-    open suspend fun media(agentId: String, toolCallId: String, index: Int): ByteArray {
-        val response = request("GET", mediaPath(agentId, toolCallId, index), null, RequestCategory.File)
+    /** The bytes of one item a tool call presented (`media` presentation), or of a message's attachment. */
+    open suspend fun media(agentId: String, ref: MediaRef): ByteArray {
+        val response = request("GET", mediaPath(agentId, ref), null, RequestCategory.File)
         if (response.status !in 200..299) decode(response)
         return response.body
     }
@@ -416,6 +409,10 @@ open class ConversationApi(
         /** One item a tool call presented; it answers a `Range` with that range (`206`). */
         fun mediaPath(agentId: String, toolCallId: String, index: Int): String =
             "/v0/agents/${escape(agentId)}/tool-calls/${escape(toolCallId)}/media/$index"
+
+        /** Where [ref]'s bytes are: its attachment's, else its tool call's media item; both answer a `Range`. */
+        fun mediaPath(agentId: String, ref: MediaRef): String =
+            ref.attachment?.let { AttachmentUploads.path(agentId, it) } ?: mediaPath(agentId, ref.toolCallId, ref.index)
 
         /** A CUID2-shaped id the daemon accepts from a client (`^[a-z][a-z0-9]+$`, 24 long). */
         fun clientId(): String = buildString {

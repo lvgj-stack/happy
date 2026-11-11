@@ -42,6 +42,16 @@ identity, avatar, selection and revocation state. Keychain enumeration recovers
 entries after metadata corruption; Keychain access errors preserve them.
 The legacy registry and RN-compatible shared item keep their current format.
 
+A launch into the foreground connects the open pairing before anything
+else (`StartupLink`, from `application(_:didFinishLaunchingWithOptions:)`):
+it reads `direct-accounts.json`'s open account and its Keychain item off the
+main thread and connects its main Tailcat client, beside the scene, the
+account's restore and home. That account's engine takes the transport
+(`AgentConnections.syncEngine(for:)`), so there is one transport and one main
+client. Until then it is let go when another account opens (a Happy
+account included), the pairing is removed, revoked or signed out, or the app
+leaves the foreground; an engine that asked before it was read makes its own.
+
 `DirectAccounts` connects each stored instance independently on launch and
 foreground. It checks health and refreshes `config.node` then and every ten
 minutes after (in the last minute of the ten, with traffic already moving:
@@ -90,6 +100,13 @@ SHA-256 matching make a lost acknowledgement safe to retry. Per-file upload
 progress is saved before the message is sent with relative file paths.
 The API prepends the required top-level caption to the optional rich blocks;
 image blocks use `mimeType`, and image-only sends supply a short caption.
+
+A send the computer refuses (a 4xx) shows "Not sent. Tap to retry." and holds
+the conversation's later sends in the outbox behind it. Its retry goes with
+the mode the composer shows now, not the refused one (`Conversation.retry`,
+`SyncEngine.retryMessage(_:mode:)`): a refusal is usually about the mode, a
+provider switched off or a model gone, and the same mode again was refused
+at once, so the tap seemed to do nothing and the later sends waited for good.
 
 An upload can take up to 15 minutes and writes its request body in cancellable
 chunks. Acknowledging the outbox row retains local copies: an older cached

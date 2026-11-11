@@ -126,6 +126,11 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
     /// Finished turns opened on their work ("View traces"), by run, for
     /// this screen's life: every other finished turn is folded.
     private var expandedTurns = Set<String>()
+    /// Settings › Appearance › Group tool calls, as this screen last read it.
+    private lazy var groupsToolCalls = session.localSettings.groupsToolCalls
+    /// The tool sections this screen saw end and the questions it saw
+    /// waiting (`ToolSections`): what a row shows, never how tall it is.
+    private var sections = ToolSections.Memory()
     /// A turn was opened or folded: the next apply moves rows in place,
     /// the rows the reader sees staying where they are.
     private var foldMoved = false
@@ -162,8 +167,15 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         known.subagents = chat.subagentTitles
         known.instanceId = session.instanceId
         known.closedFiles = closedFiles
+        // Only the work of what the messages link shows: another agent
+        // starting or stopping plans nothing again.
+        known.busy = references.busy.union(homeBusy).intersection(linkedAgents)
         return known
     }
+    /// The agents home's rows show at work.
+    private var homeBusy: Set<String> = []
+    /// The agents the messages name, by tag or link.
+    private var linkedAgents: Set<String> = []
     /// File links found not to open here, read as their words.
     private var closedFiles: Set<String> = []
     /// File links being read, so a second tap waits for the first.
@@ -458,6 +470,11 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         // went unheard: down, unless it is still this composer's.
         fingerOnKeyboard = false
         if !ownsKeyboard { keyboardTop = .greatestFiniteMagnitude }
+        // Group tool calls turned on or off on a screen over this one.
+        if session.localSettings.groupsToolCalls != groupsToolCalls {
+            groupsToolCalls = session.localSettings.groupsToolCalls
+            replan()
+        }
         ultraKeyboard?.activate()
         // Back from a screen over this one, or a swipe back let go of.
         updateBar(animated: animated)
@@ -811,12 +828,12 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
 
     /// The panel centred between the bar's foot and the card's top, so it
     /// moves with the card, in the same animation, as the keyboard comes
-    /// and goes.
+    /// and goes. Short of room it stands on the card and runs up under the
+    /// bar; it is never hidden for it.
     private func layoutNewWorkPanel(above card: CGRect) {
         guard let newWorkPanel, !newWorkPanelGone else { return }
         let layout = newWorkPanel.layout(width: view.bounds.width, sides: LayoutInsets(view.safeAreaInsets), top: view.safeAreaInsets.top, bottom: card.minY)
         newWorkPanel.place(layout)
-        newWorkPanel.isHidden = !layout.fits
     }
 
     /// The first message is in: the panel fades, and the conversation is
@@ -884,8 +901,9 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         // ones too.
         // References in messages read as the names they have now.
         if snapshot.references != references {
+            let shown = subagentReferences
             references = snapshot.references
-            replan()
+            if subagentReferences != shown { replan() }
         }
         if snapshot.allRows != sidebarRows {
             sidebarRows = snapshot.allRows
@@ -912,6 +930,12 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
     /// or task the agent renames is renamed here too, on a computer whose
     /// sidebar is the account's bootstrap rather than the spaces document.
     private func follow(_ home: HomeSnapshot) {
+        let busy = References.busy(in: home.allRows)
+        if busy != homeBusy {
+            let shown = subagentReferences
+            homeBusy = busy
+            if subagentReferences != shown { replan() }
+        }
         let agentId = media.agentId
         let spaceId = spaceId
         guard let row = home.allRows.first(where: { row in spaceId.map { row.spaceId == $0 } ?? (row.agentId == agentId && row.depth == 0) }),
@@ -1134,7 +1158,7 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
     private var planKey: ChatPlanner.Key {
         var key = ChatPlanner.Key(width: transcriptWidth, maxContentWidth: ContentWidth.maxWidth, environment: traitCollection.textEnvironment, references: subagentReferences, subagentTitles: chat.subagentTitles, pageHeights: pageHeights)
         key.server = session.server
-        if case .cloud(let permissions) = session.gate { key.uiGranted = permissions?.granted ?? [] }
+        key.agentId = media.agentId
         // Only a failure card reads the composer's model; without one the
         // key stays the warm chat's, so its rows planned ahead are taken.
         if chat.items.contains(where: { if case .failure = $0.role { true } else { false } }) {
@@ -1168,8 +1192,9 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         }
     }
 
-    /// The conversation as the transcript shows it: each finished turn
-    /// folded unless opened, a waiting question with what is ticked.
+    /// The conversation as the transcript shows it: each run of tool calls
+    /// one line under Group tool calls, each finished turn folded unless
+    /// opened, a waiting question with what is ticked.
     private var shownItems: [ChatItem] {
         var items = chat.items
         if !picks.isEmpty {
@@ -1179,83 +1204,7 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
                 items[index].role = .question(ask)
             }
         }
-        return TurnFold.fold(items, expanded: expandedTurns)
-    }
-
-    /// A press on a chat UI component's control, or on a quick reply,
-    /// which is sent as the person's words at once.
-    private func press(_ tap: ChatUiTap) {
-        guard !previewing else { return }
-        switch tap.kind {
-        case .card(let shown, let control):
-            press(control, on: shown)
-        case .reply(let replies, let index):
-            guard mayWrite != false else { return }
-            // As the composer's send: the reader is carried to the end, and
-            // at the end the message flies in, from its pill: the words were
-            // never the composer's, and a draft there stays as it is.
-            Haptics.play(.send)
-            let id = ClientID.make()
-            if sendFlies, let source = replySource(replies, index: index) {
-                ultra.flight = ChatSendFlight(source: source, host: view, message: id)
-            }
-            followsNewest = true
-            ultra.revealNextSend(animated: true)
-            let conversation = conversation
-            Task { await conversation.sendQuickReply(replies, index: index, id: id) }
-        }
-    }
-
-    /// A quick reply's pill and its words as drawn now, in the view.
-    private func replySource(_ replies: QuickReplies, index: Int) -> ChatSendFlight.Source? {
-        guard let canvas = ultra.canvas(forPlan: "replies:\(replies.messageId):\(replies.toolCallId ?? "")"), let plan = canvas.plan,
-              let pill = plan.hits.first(where: { $0.action == .ui(ChatUiTap(kind: .reply(replies, index))) })?.frame else { return nil }
-        for case let .text(text, frame) in plan.items where pill.contains(frame) {
-            return ChatSendFlight.source(pill: canvas.convert(pill, to: view), label: canvas.convert(frame, to: view), text: text, in: view)
-        }
-        return nil
-    }
-
-    /// A live component's control: a default model picked, then its effort.
-    private func press(_ control: UiCard.Tap, on shown: UiShown) {
-        switch control {
-        case .pickModel:
-            guard let defaults = shown.defaults else { return }
-            let sheet = UIAlertController(title: Strings.uiDefaultModel, message: nil, preferredStyle: .actionSheet)
-            for choice in defaults.choices {
-                let name = [choice.model.name, choice.provider.name].compactMap { $0 }.joined(separator: " · ")
-                sheet.addAction(UIAlertAction(title: name, style: .default) { [weak self] _ in
-                    self?.pickEffort(choice.model, provider: choice.provider.id, on: shown)
-                })
-            }
-            sheet.addAction(UIAlertAction(title: Strings.cancel, style: .cancel))
-            sheet.popoverPresentationController?.sourceView = view
-            sheet.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
-            present(sheet, animated: true)
-        }
-    }
-
-    /// The default model's effort, asked for when the model has more than one.
-    private func pickEffort(_ model: ModelCatalog.Model, provider: String, on shown: UiShown) {
-        func set(_ effort: String) {
-            act(UiAction(type: "default_model.set", payload: .object(["providerId": .string(provider), "modelId": .string(model.id), "effort": .string(effort)])), on: shown)
-        }
-        guard model.efforts.count > 1 else { return set(model.efforts.first ?? model.defaultEffort) }
-        let sheet = UIAlertController(title: Strings.uiEffort, message: model.name, preferredStyle: .actionSheet)
-        for effort in model.efforts {
-            sheet.addAction(UIAlertAction(title: effort, style: .default) { _ in set(effort) })
-        }
-        sheet.addAction(UIAlertAction(title: Strings.cancel, style: .cancel))
-        sheet.popoverPresentationController?.sourceView = view
-        sheet.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
-        present(sheet, animated: true)
-    }
-
-    /// Sends a component's action; the component shows how it goes.
-    private func act(_ action: UiAction, on shown: UiShown) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        let conversation = conversation
-        Task { await conversation.act(shown, action: action) }
+        return TurnFold.shown(items, working: chat.working, queued: chat.queued, grouped: groupsToolCalls, expanded: expandedTurns, memory: &sections)
     }
 
     /// The question waiting on the person, with what is ticked.
@@ -1319,7 +1268,7 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
 
     /// Plans the rows off the main thread, then shows them in one frame.
     private func replan() {
-        let key = planKey
+        var key = planKey
         // Nothing is planned from history not yet read.
         guard key.width > 0, !reading(chat) else { return }
         // Ticks outlive only the question they were for.
@@ -1336,7 +1285,9 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         }
         // Only words not looked through yet, as of what references read as
         // now: a long conversation isn't read again on every layout pass.
-        if scanned.references != references { scanned = Scanned(references: references) }
+        var settled = references
+        settled.busy = []
+        if scanned.references != settled { scanned = Scanned(references: settled) }
         // A row is looked into once per making of it (`ChatItem.revision`):
         // its words aren't joined and compared again on every word that
         // lands in another row.
@@ -1352,6 +1303,14 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
             scanned.texts[item.id] = text
             fresh.append(item)
         }
+        // The agents they link, whose work their links show.
+        // Share links count only as addressed to this computer, as `subagentReferences` knows it.
+        let known = subagentReferences
+        let linked = linkedAgents.union(fresh.flatMap { known.agents(in: $0.text) })
+        if linked != linkedAgents {
+            linkedAgents = linked
+            key = planKey
+        }
         // Artifacts the messages name are read for their titles, once each.
         let unread = fresh.flatMap { references.unread(in: $0.text) }
         if !unread.isEmpty {
@@ -1359,9 +1318,10 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
             Task { await store.readArtifacts(unread) }
         }
         // An HTML artifact a call shows is read for whether it wants to be
-        // inline, or is an app, whose card opens it full screen.
+        // inline, or is an app, whose card opens it full screen; a Gen UI
+        // for its document, drawn under its card.
         for piece in changed.lazy.flatMap(\.pieces) {
-            if case .artifact(let artifact) = piece, artifact.type == "html" { scanned.pages.insert(artifact.id) }
+            if case .artifact(let artifact) = piece, artifact.type == "html" || artifact.type == "gen_ui" { scanned.pages.insert(artifact.id) }
         }
         let pages = scanned.pages.filter { references.artifacts[$0] == nil }
         if !pages.isEmpty {
@@ -1486,21 +1446,7 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
             card.accessibilityFrameInContainerSpace = hit.frame
             return card
         }
-        // Quick replies and a card's buttons, each pressed on its own (a
-        // double tap lands on it): the one sent selected, one that can't be
-        // used now dimmed.
-        let controls = plan.controls.map { control -> UIAccessibilityElement in
-            let element = UIAccessibilityElement(accessibilityContainer: row)
-            element.accessibilityLabel = control.label
-            var traits: UIAccessibilityTraits = .button
-            if control.selected { traits.insert(.selected) }
-            if control.action == nil { traits.insert(.notEnabled) }
-            element.accessibilityTraits = traits
-            element.accessibilityIdentifier = "control"
-            element.accessibilityFrameInContainerSpace = control.frame
-            return element
-        }
-        let media: [Any] = (row.mediaViews as [Any]) + (cards as [Any]) + (cardsHosted as [Any]) + (controls as [Any])
+        let media: [Any] = (row.mediaViews as [Any]) + (cards as [Any]) + (cardsHosted as [Any])
         row.isAccessibilityElement = media.isEmpty
         if media.isEmpty {
             row.accessibilityElements = nil
@@ -1543,13 +1489,15 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
 
     /// The header's grey line: what the agent is at, in a word, while it is.
     private func updateHeaderStatus() {
-        header.status = Strings.HeaderStatus.text(headerState, activity: chat.activity, loaded: chat.loaded)
+        // Updating only until this chat's history read lands, whatever home is at.
+        let state = LinkState.chat(home: headerState, historyRead: chat.synced || chat.error != nil)
+        header.status = Strings.HeaderStatus.text(state, activity: chat.activity, loaded: chat.loaded)
         // The link on its way, or the chat still catching up: said with
         // the spinner, as home's title says it.
-        header.statusSpins = Strings.HeaderStatus.spins(headerState) || (headerState == .online && !chat.loaded)
+        header.statusSpins = Strings.HeaderStatus.spins(state) || (state == .online && !chat.loaded)
         // "Thinking" and "Working" sweep while the working line's loader
         // runs; a question or a wait is said still.
-        header.statusShimmers = headerState == .online && chat.loaded && ChatJumpButton.spins(chat.activity)
+        header.statusShimmers = state == .online && chat.loaded && ChatJumpButton.spins(chat.activity)
     }
 
     // MARK: Layout
@@ -2086,37 +2034,9 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         replan()
     }
 
-    /// What a message names, opened over this one: a conversation, or an
-    /// artifact at the version the reference pinned.
+    /// What a message names, opened over this one.
     private func open(_ reference: HappyReferences.Reference) {
-        if reference.kind == "artifact" {
-            // Still being read, the viewer reads it itself.
-            var known: (title: String, type: String, latest: Int) = ("", "", 1)
-            switch references.artifacts[reference.id] {
-            case .active(let title, let type, let latest)?: known = (title, type, latest)
-            case nil: let store = session.store; Task { await store.readArtifacts([reference.id]) }
-            default: return
-            }
-            var artifact = Artifact(id: reference.id, version: reference.version ?? known.latest, type: known.type, title: known.title, followsLatest: reference.version == nil)
-            artifact.pinned = reference.version != nil
-            openArtifact(artifact, session: session)
-            return
-        }
-        if reference.kind == "surface" {
-            guard let surface = references.surfaces[reference.id] else { return }
-            navigationController?.pushViewController(SurfaceScreens.make(session: session, surface: surface), animated: true)
-            return
-        }
-        guard let entity = references.entity(reference) else { return }
-        // A bot's or task's own conversation opens as its row opens it: renamed in its bar, its mark in the intro.
-        let row = sidebarRows.first { $0.kind == .space && $0.agentId == entity.agentId }
-        let intro: Intro? = switch row?.mark {
-        case .clay(let slug)?: .clay(slug)
-        default: nil
-        }
-        let title = references.view(reference).label
-        let chat = ChatViewController(session: session, agentId: entity.agentId, title: title, spaceId: row?.spaceId, intro: intro)
-        navigationController?.pushViewController(chat, animated: true)
+        openReference(reference, references: references, rows: sidebarRows, session: session)
     }
 
     private func loadOlder() {
@@ -2125,13 +2045,10 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
         Task { await conversation.loadOlder() }
     }
 
-    /// A link in a row: the reference it names, else the web.
+    /// A link in a row: a Happy link in the app, else the web.
     private func open(link: String) {
-        if let reference = HappyReferences.reference(link: link) { open(reference) }
-        else if let page = SettingsLinkPlace.page(link) { SettingsLinks.open(page, options: HappyLink(link)?.providerOptions ?? .init(), session: session, from: self) }
-        else if let file = ChatLinks.file(link) { open(file) }
-        else if HappyLink.isHappyURL(link) { return }
-        else if let url = URL(string: link) { openBrowser(url, session: session, agentID: media.agentId) }
+        if openHappyLink(link, references: subagentReferences, rows: sidebarRows, session: session, file: { [weak self] in self?.open($0) }) { return }
+        if let url = URL(string: link) { openBrowser(url, session: session, agentID: media.agentId) }
     }
 
     /// A file link, read before anything shows: the file read-only over
@@ -2196,6 +2113,11 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
             if media.isDownloaded(key) { open(key) } else { media.toggleDownload(key) }
         case .openArtifact(let artifact):
             openArtifact(artifact, session: session)
+        case .openPipelineRun(let runId, let pipelineName):
+            // The run page says so when the run can't be read.
+            guard !previewing else { return }
+            card.blur()
+            navigationController?.pushViewController(PipelineRunViewController(session: session, runId: runId, pipelineName: pipelineName), animated: true)
         case .toggleTool(let messageId):
             toggle(messageId)
         case .openMessage(let itemId):
@@ -2208,8 +2130,6 @@ final class ChatViewController: UIViewController, ComposeHosting, KeyboardPushed
             pick(questionId: questionId, promptId: promptId, option: option)
         case .questionSubmit(let questionId):
             submit(questionId: questionId)
-        case .ui(let tap):
-            press(tap)
         default:
             break
         }
@@ -2373,6 +2293,35 @@ extension ChatViewController: PageHosting {
     }
 }
 
+extension ChatViewController: GenUIMessageActing {
+    func genUIMessage(run action: GenUIAction, agentId: String) {
+        guard agentId == media.agentId, !previewing, GenUIMessage.enables(action) else { return }
+        if GenUIActionRunner.run(action, session: session, from: self, agentId: agentId) { return }
+        guard case .message(let text) = action else { return }
+        Haptics.play(.send)
+        followsNewest = true
+        ultra.revealNextSend(animated: true)
+        let conversation = conversation
+        Task { await conversation.send(text: text) }
+    }
+}
+
+extension ChatViewController: GenUIActing {
+    /// A `message` goes as the person's next message here, the origin
+    /// agent's own conversation (the only place it is enabled).
+    func genUI(run action: GenUIAction, key: String, artifactId: String, version: Int, in block: GenUIBlockView) {
+        if GenUIActionRunner.run(action, session: session, from: self, agentId: media.agentId) { return }
+        if action.opensSecretForm {
+            return GenUIActionRunner.openForm(action, key: key, artifactId: artifactId, version: version, in: block, client: session.client, from: self)
+        }
+        guard case .message(let text) = action, !previewing else { return }
+        Haptics.play(.send)
+        followsNewest = true
+        ultra.revealNextSend(animated: true)
+        let conversation = conversation
+        Task { await conversation.send(text: text) }
+    }
+}
 
 private extension ChatDrawItem {
     /// Where a message's words are drawn: its bubble, text and blocks, not

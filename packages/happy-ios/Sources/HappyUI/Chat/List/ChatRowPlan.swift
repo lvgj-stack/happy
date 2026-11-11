@@ -38,11 +38,8 @@ final class ChatRowPlan: @unchecked Sendable {
     /// The words a person can select once the message is lifted, and the
     /// whole message as Copy copies it; nil where there are none.
     let selection: ChatSelectable?
-    /// Drawn controls VoiceOver reads and presses one by one, after the
-    /// row's words.
-    let controls: [ChatControl]
 
-    init(id: String, size: CGSize, items: [ChatDrawItem], hits: [ChatHit] = [], alpha: CGFloat = 1, accessibilityLabel: String? = nil, proposals: [(artifactId: String, layout: SidebarProposalLayout, frame: CGRect)] = [], toggles: String? = nil, flight: ChatRowFlight? = nil, mine: Bool = false, revealable: Bool = false, selection: ChatSelectable? = nil, controls: [ChatControl] = []) {
+    init(id: String, size: CGSize, items: [ChatDrawItem], hits: [ChatHit] = [], alpha: CGFloat = 1, accessibilityLabel: String? = nil, proposals: [(artifactId: String, layout: SidebarProposalLayout, frame: CGRect)] = [], toggles: String? = nil, flight: ChatRowFlight? = nil, mine: Bool = false, revealable: Bool = false, selection: ChatSelectable? = nil) {
         self.id = id
         self.size = size
         self.items = items
@@ -55,7 +52,6 @@ final class ChatRowPlan: @unchecked Sendable {
         self.mine = mine
         self.revealable = revealable
         self.selection = selection
-        self.controls = controls
     }
 
     /// Where its words are, in reading order, for a revealable plan. Worked
@@ -156,6 +152,10 @@ enum ChatDrawItem {
     case spinner(CGRect, tint: ColorToken, scale: CGFloat)
     /// A label carrying the shimmer while its work goes (`ChatShimmerView`).
     case shimmer(ChatShimmerText, frame: CGRect)
+    /// A busy link's band over the words drawn under it (`ChatSheen`): a
+    /// copy of the text at `frame` with only that link's words, in the
+    /// band's colour, wiped through across `run`, the link in the frame.
+    case sheen(ChatTextLayout, frame: CGRect, run: CGRect)
     /// A running tool's timer: whole seconds since `since` (ms), as "12.0s",
     /// at the row's text size (nil: the designed size).
     case elapsed(since: Int64, frame: CGRect, text: TextEnvironment?)
@@ -191,12 +191,18 @@ enum ChatDrawItem {
     case embed(ChatEmbed, frame: CGRect)
     /// A person's own message's clock or checks (`ChatDeliveryView`).
     case delivery(ChatDeliveryMark, frame: CGRect)
+    /// A tool section's one line (`ChatToolLineView`): it keeps what it
+    /// showed and replaces it letter by letter.
+    case toolLine(ChatToolLine, frame: CGRect)
 }
 
 /// What an embedded view shows.
 enum ChatEmbed: Equatable, Sendable {
     /// An HTML artifact's page (`InlinePageView`).
     case page(InlinePage)
+    /// A `gen_ui` artifact's document (`GenUIBlockView`).
+    case genUI(GenUIEmbed)
+    case genUIMessage(GenUIMessageEmbed)
 }
 
 /// An artifact's page shown inline in a V2 conversation: the
@@ -326,10 +332,10 @@ enum ChatRowAction: Equatable, Sendable {
     case playAttachment(ChatAttachment)
     /// A V2 artifact's card.
     case openArtifact(Artifact)
+    /// A pipeline result's row: its run's page.
+    case openPipelineRun(runId: String, pipelineName: String?)
     /// A finished V2 turn's "View traces" / "Hide traces", by its run.
     case toggleTurn(String)
-    /// A press on a chat UI component.
-    case ui(ChatUiTap)
 
     // Long presses
 
@@ -348,16 +354,6 @@ struct ChatPermissionTap: Equatable, Sendable {
     var permissionId: String
     var kind: PermissionButton.Kind
     var reply: PermissionReply
-}
-
-/// A control drawn in a row (a quick reply, a card's button), as VoiceOver
-/// has it: where it is in row coordinates, what it says, whether it is the
-/// one chosen, and what pressing it does (nil: it can't be used now).
-struct ChatControl {
-    var frame: CGRect
-    var label: String
-    var selected = false
-    var action: ChatRowAction?
 }
 
 struct ChatHit {

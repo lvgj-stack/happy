@@ -1051,6 +1051,7 @@ final class ChatUltraQAProbe: NSObject {
         case .openMessage(let id): "open:\(id)"
         case .openMessageFile(let id, let file): "openFile:\(id):\(file.suffix(60))"
         case .openFile(let path): "file:\(path.suffix(60))"
+        case .linkButton(let url, _): "link:\(url.suffix(60))"
         case .option(let title): "option:\(title.prefix(60))"
         case .retry(let localId): "retry:\(localId)"
         case .permission(let tap): "permission:\(tap.permissionId):\(tap.kind)"
@@ -1063,17 +1064,13 @@ final class ChatUltraQAProbe: NSObject {
         case .playAttachment(let attachment): "play:\(attachment.ref)"
         case .cancelUpload(let messageId, let piece): "cancelUpload:\(messageId):\(piece)"
         case .openArtifact(let artifact): "artifact:\(artifact.id)"
+        case .openPipelineRun(let runId, _): "pipelineRun:\(runId)"
         case .toggleTurn(let turn): "turn:\(turn)"
         case .openURL(let url): "url:\(url.prefix(60))"
         case .linkButton(let url, _): "linkButton:\(url.prefix(60))"
         case .copyMenu: "copyMenu"
         case .selectable: "selectable"
         case .markdownSelectable: "markdownSelectable"
-        case .ui(let tap):
-            switch tap.kind {
-            case .card(let shown, _): "ui:\(shown.offer.key)"
-            case .reply(let replies, let index): "reply:\(replies.messageId):\(index)"
-            }
         }
     }
 

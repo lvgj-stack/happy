@@ -35,6 +35,9 @@ final class Session {
     private(set) var permissions: Permissions?
     /// What each vault lets the person do, by Surface ID (cloud only).
     private(set) var vaultAccesses: [String: VaultAccess] = [:]
+    /// The server serves its instructions and security policy from its
+    /// settings (`PolicyDocument.served`); nil until its permissions are read.
+    var policyDocuments: Bool? { PolicyDocument.served(permissions) }
     private var accessWatchers: [UUID: () -> Void] = [:]
     /// What the controls a role decides follow: a computer gates nothing.
     var gate: RoleGate { isCloud ? .cloud(permissions) : .open }
@@ -78,6 +81,8 @@ final class Session {
         return source
     }
     private var madeProfile: ProfileSource?
+    /// A Happy Cloud server's plugins, read while a screen watches.
+    private(set) lazy var plugins = PluginsModel(client: client, store: store)
     private(set) var snapshot = Snapshot()
     private var watchers: [UUID: (Snapshot) -> Void] = [:]
     /// Readable, not settable, so a test can say the follow was let go of
@@ -92,6 +97,7 @@ final class Session {
     private var connectionStatus: ConnectionStatus = .connecting
     /// Whether the phone has a way out at all (`NetworkPath`).
     private var networkPath = NetworkPath.shared.isSatisfied
+    private var networkMoves = NetworkPath.shared.moves
     private var networkWatch: NetworkPathWatch?
     /// The link as it is (`headerState(status:snapshot:network:)`), and as
     /// headers show it: home's title and every chat's subtitle watch
@@ -184,6 +190,7 @@ final class Session {
         store = engine.spaces
         images = Images(client: client, offline: offline)
         warm = WarmChats(client: client, store: store, syntax: syntax, persistence: engine)
+        warm.groupsToolCalls = { [localSettings] in localSettings.groupsToolCalls }
         warm.server = server
         warm.instanceId = instanceId
         models = ModelState(client: client, offline: offline, store: store, cloud: isCloud)
@@ -203,10 +210,18 @@ final class Session {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let back = satisfied && !self.networkPath
+                let moves = NetworkPath.shared.moves
+                let moved = satisfied && moves != self.networkMoves
                 self.networkPath = satisfied
+                // A move heard while there is no way out waits for one: gone
+                // and back on cellular before this ran is a move still.
+                if satisfied { self.networkMoves = moves }
                 self.updateHeaderState()
+                // Off Wi-Fi onto cellular: the stream says live over a way
+                // that may be gone, so it is opened again now.
+                if moved { Task { await engine.moved() } }
                 // Back from airplane mode: reconnect, and send what waited, now.
-                if back { Task { await engine.reconnect() } }
+                else if back { Task { await engine.reconnect() } }
             }
         }
         connectionObservation = account.observeAccounts { [weak self, weak account] _ in
@@ -232,7 +247,7 @@ final class Session {
     /// permissions (`role.*`), and the vaults' access (`surface.*`,
     /// `vault.settings.updated`); everything on a resync. A role changed at
     /// the accounts service lands with the next token, so a reconnect
-    /// reads the permissions again too (`reconnected`).
+    /// reads the permissions and onboarding again too (`reconnected`).
     private func followCloud() {
         let store = store
         cloudFollowing = Task { [weak self] in
@@ -266,7 +281,24 @@ final class Session {
 
     private func reconnected() {
         guard isCloud else { return }
-        read([.permissions, .vaults])
+        // Back in the foreground, too: a sign-in on another phone moves
+        // onboarding (`mobileApp`) without an event.
+        read([.onboarding, .permissions, .vaults])
+        renewPush()
+    }
+
+    /// This phone's push registration on the server, renewed quietly
+    /// where notifications are allowed (`CloudPush`); a new one completes
+    /// onboarding's `mobileApp` gate, which is read again for it.
+    private func renewPush() {
+        guard let push = SettingsHooks.cloudPush else { return }
+        let client = client
+        let connection = accountID
+        Task { [weak self] in
+            guard (try? await push.register(connection: connection, client: client, ask: false)) == .registered,
+                  let self, onboarding?.gate("mobileApp")?.isPending == true else { return }
+            read([.onboarding])
+        }
     }
 
     private func read(_ parts: Set<CloudPart>) {
@@ -312,6 +344,20 @@ final class Session {
         for watcher in onboardingWatchers.values { watcher(onboarding) }
     }
 
+    /// Reads onboarding now, as a step does once it is seen to; a failed
+    /// read keeps what was read and throws.
+    @discardableResult
+    func readOnboarding() async throws -> Onboarding {
+        let read = try await client.onboarding()
+        took(read)
+        return read
+    }
+
+    /// Onboarding as a route answered it (a skip).
+    func took(_ onboarding: Onboarding) {
+        if onboarding != self.onboarding { adopt(onboarding) }
+    }
+
     private func adopt(_ permissions: Permissions) {
         self.permissions = permissions
         for watcher in accessWatchers.values { watcher() }
@@ -355,24 +401,15 @@ final class Session {
         return Watch { [weak self] in self?.watchers.removeValue(forKey: id) }
     }
 
-    /// No link is ever offline: one not connected is asked again with
-    /// backoff for as long as it is there, so it is connecting, whatever
-    /// kept it away. What is not the network's to fix (a pairing to redo, a
-    /// sign-in that ended) home's notice says, in its own words.
-    static func headerState(status: ConnectionStatus, snapshot: HomeSnapshot, network: Bool = true) -> Strings.HeaderStatus.State {
-        // No way out at all: nothing to connect to yet, whatever was last heard.
-        if !network { return .waitingForNetwork }
-        // The stream is open: it is the truth, whatever the pairing's own
-        // check (which retries on its own backoff) last said.
-        if snapshot.live { return snapshot.loaded && !snapshot.syncing ? .online : .syncing }
-        // The pairing answered and the stream isn't open yet: catching up,
-        // unless the stream is on its way back or stopped for a reason.
-        if status == .connected, !snapshot.reconnecting, snapshot.error == nil { return .syncing }
-        return .connecting
+    /// Home's header (`LinkState.home`): what is not the network's to fix
+    /// (a pairing to redo, a sign-in that ended) home's notice says, in its
+    /// own words.
+    static func headerState(snapshot: HomeSnapshot, network: Bool = true) -> Strings.HeaderStatus.State {
+        .home(snapshot, network: network)
     }
 
     private func updateHeaderState() {
-        let next = Self.headerState(status: connectionStatus, snapshot: home, network: networkPath)
+        let next = Self.headerState(snapshot: home, network: networkPath)
         guard next != headerState else { return }
         headerState = next
         link.want(next)

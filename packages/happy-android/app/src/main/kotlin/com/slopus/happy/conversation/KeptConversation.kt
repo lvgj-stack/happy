@@ -36,6 +36,8 @@ data class KeptConversation(
     val mode: Mode?,
     /** The agent's slash commands as last read; null when none were. */
     val slashCommands: List<SlashCommand>? = null,
+    /** When the computer's history was last read in full (ms since 1970); null if never, or kept before it was. */
+    val syncedAt: Long? = null,
 ) {
     fun json(): JsonObject = buildJsonObject {
         put("version", VERSION)
@@ -45,12 +47,17 @@ data class KeptConversation(
         agent?.let { put("agent", agentJson(it)) }
         mode?.let { put("mode", it.json()) }
         slashCommands?.let { put("slashCommands", SlashCommand.json(it)) }
+        syncedAt?.let { put("syncedAt", it) }
     }
 
     companion object {
         /** desktop's window on a conversation nobody reads (connectHappyAgent's `trimHistory`), as iOS keeps. */
         const val KEPT_RUNS = 100
-        private const val VERSION = 1
+        /**
+         * 2: file blocks keep their kind, size on screen and thumbhash; 3: a message keeps why an agent wrote it
+         * and a pipeline run's result. A phone that kept them without reads them again.
+         */
+        private const val VERSION = 3
 
         fun parse(value: JsonObject?): KeptConversation? {
             val o = value ?: return null
@@ -62,6 +69,7 @@ data class KeptConversation(
                 agent = AgentInfo.parse(o["agent"]),
                 mode = Mode.parse(o["mode"]),
                 slashCommands = SlashCommand.parseAll(o["slashCommands"]),
+                syncedAt = (o["syncedAt"] as? JsonPrimitive)?.content?.toLongOrNull(),
             )
         }
 
@@ -84,11 +92,12 @@ data class KeptConversation(
             message.runId?.let { put("runId", it) }
             putJsonObject("metadata") {
                 message.senderAgentId?.let { put("senderAgentId", it) }
+                message.senderAgentExplanation?.let { put("senderAgentExplanation", it) }
+                message.pipelineRun?.let { put("pipelineRun", it) }
                 message.userId?.let { put("userId", it) }
             }
             message.failure?.let { put("failure", it) }
             message.error?.let { put("error", it) }
-            message.quickReply?.let { put("quickReply", it.json()) }
         }
 
         private fun blockJson(block: Block): JsonObject = when (block) {
@@ -101,6 +110,11 @@ data class KeptConversation(
                 put("name", block.name)
                 block.mimeType?.let { put("mimeType", it) }
                 block.size?.let { put("size", it) }
+                block.kind?.let { put("kind", it) }
+                block.width?.let { put("width", it) }
+                block.height?.let { put("height", it) }
+                block.thumbhash?.let { put("thumbhash", it) }
+                block.scale?.let { put("scale", it) }
             }
             is Block.ToolCall -> buildJsonObject {
                 put("type", "tool_call")
@@ -124,9 +138,6 @@ data class KeptConversation(
                 block.elevated?.let { put("elevated", it) }
             }
             is Block.Compaction -> buildJsonObject { put("type", "compaction"); put("status", block.status) }
-            is Block.Ui -> block.raw
-            is Block.Action -> block.raw
-            is Block.QuickReplies -> block.raw
             is Block.Unknown -> buildJsonObject { put("type", block.type) }
         }
 
@@ -169,6 +180,10 @@ data class KeptConversation(
                 put("type", "media")
                 put("items", JsonArray(presentation.items.map(::mediaJson)))
                 if (presentation.columns > 0) putJsonObject("layout") { put("type", "columns"); put("columns", presentation.columns) }
+            }
+            is Presentation.GenUi -> buildJsonObject {
+                put("type", "gen_ui")
+                presentation.document?.let { put("document", it) }
             }
             is Presentation.Artifact -> buildJsonObject {
                 put("type", "artifact")
@@ -238,8 +253,6 @@ data class KeptConversation(
                 put("input", presentation.input)
                 presentation.command?.let { put("command", it) }
             }
-            is Presentation.Ui -> presentation.raw
-            is Presentation.QuickReplies -> presentation.raw
         }
 
         private fun hunkJson(hunk: Presentation.FileDiff.Hunk): JsonObject = buildJsonObject {

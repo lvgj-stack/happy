@@ -34,7 +34,7 @@ sealed interface MarkdownBlock {
     data class Buttons(val links: List<MarkdownSpan>) : MarkdownBlock
 }
 
-private val SPAN_PATTERN = Regex("""(\*\*(.*?)(?:\*\*|$))|(\*(.*?)(?:\*|$))|(\[([^\]]+)\](?:\(((?:[^()]|\([^()]*\))+)\))?)|(`(.*?)(?:`|$))""")
+private val SPAN_PATTERN = Regex("""(\*\*(.*?)(?:\*\*|$))|(\*(.*?)(?:\*|$))|(\[([^\]]*)\](?:\(((?:[^()]|\([^()]*\))+)\))?)|(`(.*?)(?:`|$))""")
 private val URL_PATTERN = Regex("""https?://[^\s<]+""")
 private val TRAILING_PUNCTUATION = Regex("""[),.;:!?]$""")
 private val TABLE_SEPARATOR = Regex("""^[|\s\-:=]*$""")
@@ -51,6 +51,52 @@ private val SETTINGS_HOST = Regex("^happy://(?:[a-z][a-z0-9]{23}/)?settings(?:[/
 fun isHttpMarkdownLink(url: String): Boolean = HTTP_URL.containsMatchIn(url.trim())
 
 fun parseMarkdown(markdown: String): List<MarkdownBlock> = parseMarkdownBlocks(markdown)
+
+/**
+ * [markdown] parsed as a whole document (a file, an artifact): its opening
+ * YAML frontmatter is a `yaml` code block ([MarkdownFrontmatter]). A
+ * conversation's messages are not read this way: one that opens with a rule
+ * is not a document, and would change shape as it streams once a second
+ * rule arrived.
+ */
+fun parseMarkdownDocument(markdown: String): List<MarkdownBlock> = parseMarkdownBlocks(markdown, frontmatter = true)
+
+/**
+ * YAML frontmatter: a document whose very first line is exactly `---`,
+ * closed by a later line that is exactly `---` or `...`. Read by CommonMark
+ * it is a rule and a setext heading holding every line of the YAML; the
+ * renderers show it as a `yaml` code block instead. Only the start of a
+ * document opens one, and one that never closes is not one. iOS's
+ * `MarkdownFrontmatter` is the same rules.
+ */
+object MarkdownFrontmatter {
+    /** The index of the line closing the frontmatter [lines] (a document split on '\n') open with, null when they open with none. */
+    fun closingLine(lines: List<String>): Int? {
+        if (lines.isEmpty() || bare(lines[0].removePrefix("\uFEFF")) != "---") return null
+        for (index in 1 until lines.size) {
+            val line = bare(lines[index])
+            if (line == "---" || line == "...") return index
+        }
+        return null
+    }
+
+    /** The YAML between the opening line and the one at [close]. */
+    fun content(lines: List<String>, close: Int): String = lines.subList(1, close).joinToString("\n", transform = ::bare)
+
+    /**
+     * The document's frontmatter, fences included and as written, and what
+     * follows it; null when it has none. For the passes that rewrite a
+     * document's Markdown before it is parsed, which leave YAML alone.
+     */
+    fun split(markdown: String): Pair<String, String>? {
+        val lines = markdown.split('\n')
+        val close = closingLine(lines) ?: return null
+        return lines.subList(0, close + 1).joinToString("\n") to lines.subList(close + 1, lines.size).joinToString("\n")
+    }
+
+    /** A line without the '\r' a CRLF file leaves at its end. */
+    private fun bare(line: String): String = line.removeSuffix("\r")
+}
 
 /**
  * [markdown] parsed for one connection: a settings link to a page [hasPage]
@@ -125,47 +171,53 @@ private fun MutableList<MarkdownSpan>.pushTextWithAutoLinks(text: String, styles
     if (lastIndex < text.length) add(MarkdownSpan(styles, text.substring(lastIndex)))
 }
 
-fun parseMarkdownSpans(markdown: String, header: Boolean): List<MarkdownSpan> {
-    val spans = ArrayList<MarkdownSpan>()
+fun parseMarkdownSpans(markdown: String, header: Boolean): List<MarkdownSpan> = ArrayList<MarkdownSpan>().also { it.addSpans(markdown, header, emptySet()) }
+
+/**
+ * [markdown]'s spans, each with [styles] over its own. Bold and italic are
+ * read again inside, so a link or code in them is one, in their style
+ * (`**[X](url)**` is one bold link).
+ */
+private fun MutableList<MarkdownSpan>.addSpans(markdown: String, header: Boolean, styles: Set<SpanStyle>) {
     var lastIndex = 0
     for (match in SPAN_PATTERN.findAll(markdown)) {
         // JS's global exec never yields an empty match here, but Kotlin's
         // findAll steps past one; an empty match carries nothing either way.
         if (match.value.isEmpty()) continue
         val plain = markdown.substring(lastIndex, match.range.first)
-        if (plain.isNotEmpty()) spans.pushTextWithAutoLinks(plain, emptySet())
+        if (plain.isNotEmpty()) pushTextWithAutoLinks(plain, styles)
         val g = match.groups
         when {
-            g[1] != null -> spans.pushTextWithAutoLinks(g[2]?.value.orEmpty(), if (header) emptySet() else setOf(SpanStyle.Bold))
-            g[3] != null -> spans.pushTextWithAutoLinks(g[4]?.value.orEmpty(), if (header) emptySet() else setOf(SpanStyle.Italic))
+            g[1] != null -> addSpans(g[2]?.value.orEmpty(), header, if (header) styles else styles + SpanStyle.Bold)
+            g[3] != null -> addSpans(g[4]?.value.orEmpty(), header, if (header) styles else styles + SpanStyle.Italic)
             g[5] != null -> {
                 val target = g[7]?.value
-                if (target != null) spans.add(link(g[6]!!.value, target))
-                else spans.pushTextWithAutoLinks("[${g[6]!!.value}]", emptySet())
+                if (target != null) add(link(g[6]!!.value, target, styles))
+                else pushTextWithAutoLinks("[${g[6]!!.value}]", styles)
             }
-            g[8] != null -> spans.add(MarkdownSpan(setOf(SpanStyle.Code), g[9]?.value.orEmpty()))
+            g[8] != null -> add(MarkdownSpan(styles + SpanStyle.Code, g[9]?.value.orEmpty()))
         }
         lastIndex = match.range.last + 1
     }
-    if (lastIndex < markdown.length) spans.pushTextWithAutoLinks(markdown.substring(lastIndex), emptySet())
-    return spans
+    if (lastIndex < markdown.length) pushTextWithAutoLinks(markdown.substring(lastIndex), styles)
 }
 
 /**
- * `[text](target)` as a span. A Happy link titled `button` is one; a settings
- * link that is malformed or has a blank label, and a malformed Happy link
- * asking to be a button, are their label as inert text (API.md, "Buttons",
- * "Settings links").
+ * `[text](target)` as a span in [styles]. A Happy link titled `button` is
+ * one; a settings link that is malformed or has a blank label, and a
+ * malformed Happy link asking to be a button, are their label as inert text
+ * (API.md, "Buttons", "Settings links").
  */
-private fun link(text: String, target: String): MarkdownSpan {
+private fun link(text: String, target: String, styles: Set<SpanStyle> = emptySet()): MarkdownSpan {
     val parts = LINK_TARGET.matchEntire(target.trim())
     val url = parts?.let { it.groups[1]?.value ?: it.groups[2]?.value } ?: target
     val title = parts?.let { it.groups[3] ?: it.groups[4] ?: it.groups[5] }?.value
     val link = HappyUrls.parse(url)?.link
     val button = title == "button" && HappyUrls.owns(url)
     val inert = (button && link == null) || (SETTINGS_HOST.containsMatchIn(url) && (link == null || text.isBlank()))
-    if (inert) return MarkdownSpan(emptySet(), text)
-    return MarkdownSpan(emptySet(), text, url, button = button)
+    if (inert) return MarkdownSpan(styles, text)
+    // A link with no words of its own (`[](url)` that nothing named) shows its address.
+    return MarkdownSpan(styles, text.ifEmpty { url }, url, button = button)
 }
 
 /**
@@ -242,10 +294,18 @@ private fun parseTable(lines: List<String>, startIndex: Int): Pair<MarkdownBlock
 
 private fun String.indent(): Int = length - trimStart().length
 
-fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
+fun parseMarkdownBlocks(markdown: String, frontmatter: Boolean = false): List<MarkdownBlock> {
     val blocks = ArrayList<MarkdownBlock>()
     val lines = markdown.split('\n')
     var index = 0
+    if (frontmatter) {
+        MarkdownFrontmatter.closingLine(lines)?.let { close ->
+            val yaml = MarkdownFrontmatter.content(lines, close)
+            // Frontmatter that says nothing draws nothing.
+            if (yaml.isNotBlank()) blocks.add(MarkdownBlock.CodeBlock("yaml", yaml))
+            index = close + 1
+        }
+    }
     outer@ while (index < lines.size) {
         val line = lines[index]
         index++
@@ -305,11 +365,14 @@ fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
                 all.add(Line(next.groupValues[1].toIntOrNull() ?: 0, raw.indent(), nextTrimmed.substring(next.value.length)))
                 index++
             }
-            val base = all.first().indent
+            val base = all.minOf { it.indent }
             blocks.addLifting(MarkdownBlock.NumberedList(all.map { MarkdownBlock.NumberedItem(it.number, Math.floorDiv(it.indent - base, 2), parseMarkdownSpans(it.content, false)) }))
             continue@outer
         }
 
+        // Depth counts from the list's least indented item, never its first: a list can
+        // open on a nested item (sub-bullets under a numbered line, which the numbered
+        // list doesn't take) and go back out, and a negative depth is no depth at all.
         BULLET.find(trimmed)?.let { first ->
             val all = arrayListOf(line.indent() to trimmed.substring(first.value.length))
             while (index < lines.size) {
@@ -319,7 +382,7 @@ fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
                 all.add(raw.indent() to nextTrimmed.substring(next.value.length))
                 index++
             }
-            val base = all.first().first
+            val base = all.minOf { it.first }
             blocks.addLifting(MarkdownBlock.BulletList(all.map { (indent, content) -> MarkdownBlock.ListItem(Math.floorDiv(indent - base, 2), parseMarkdownSpans(content, false)) }))
             continue@outer
         }

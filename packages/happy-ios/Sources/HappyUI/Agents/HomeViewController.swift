@@ -719,6 +719,8 @@ final class HomeViewController: UIViewController {
             return rows.first { ($0.kind == .space || $0.kind == .session) && $0.targetKind != "surface" && $0.agentId == chat.shownAgentId }?.id
         }
         if shown is ArtifactsViewController { return rows.first { $0.targetKind == "artifacts" }?.id }
+        if shown is PluginsViewController { return rows.first { $0.targetKind == "plugins" }?.id }
+        if shown is PipelinesViewController { return rows.first { $0.targetKind == "pipelines" }?.id }
         if shown is TodoListsViewController { return rows.first { $0.targetKind == "todos" }?.id }
         if shown is FeedViewController { return rows.first { $0.targetKind == "feed" }?.id }
         return nil
@@ -749,6 +751,12 @@ final class HomeViewController: UIViewController {
         case .space where row.targetKind == "artifacts":
             sidebar.selectedRowId = row.id
             show(ArtifactsViewController(session: session), for: row, animated: animated)
+        case .space where row.targetKind == "plugins":
+            sidebar.selectedRowId = row.id
+            show(PluginsViewController(session: session), for: row, animated: animated)
+        case .space where row.targetKind == "pipelines":
+            sidebar.selectedRowId = row.id
+            show(PipelinesViewController(session: session), for: row, animated: animated)
         case .space where row.targetKind == "todos":
             sidebar.selectedRowId = row.id
             show(TodoListsViewController(session: session), for: row, animated: animated)
@@ -891,7 +899,7 @@ extension HomeViewController {
     private func warmUp() {
         guard let session, !snapshot.allRows.isEmpty else { return }
         let shown = sidebar.shownRows
-        session.warm.update(rows: shown.isEmpty ? snapshot.rows : shown, visible: shown.isEmpty ? nil : sidebar.visibleRange, references: snapshot.references)
+        session.warm.update(rows: shown.isEmpty ? snapshot.rows : shown, visible: shown.isEmpty ? nil : sidebar.visibleRange, references: snapshot.references, verified: agentHome.live && !agentHome.syncing)
     }
 }
 

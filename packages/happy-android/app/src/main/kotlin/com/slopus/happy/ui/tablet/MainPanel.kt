@@ -51,6 +51,7 @@ import com.slopus.happy.ui.artifacts.AgentArtifactsRoute
 import com.slopus.happy.ui.feed.AgentFeedRoute
 import com.slopus.happy.ui.chat.COMPOSE_STARTED
 import com.slopus.happy.ui.chat.SessionRoute
+import com.slopus.happy.ui.chat.shownSessionId
 import com.slopus.happy.ui.chat.isComposeChatId
 import com.slopus.happy.ui.components.MaterialSymbols
 import com.slopus.happy.ui.components.SceneAnimation
@@ -191,6 +192,8 @@ val LocalMainPanel = compositionLocalOf<MainPanel?> { null }
 object MainPanelKey {
     const val SETTINGS = "settings"
     const val ARTIFACTS = "artifacts"
+    const val PLUGINS = "plugins"
+    const val PIPELINES = "pipelines"
     const val FEED = "feed"
     const val TODOS = "todos"
     const val NEW_SESSION = "newSession"
@@ -208,13 +211,15 @@ object MainPanelKey {
     fun of(entry: NavBackStackEntry): String? {
         val destination = entry.destination
         return when {
-            // A compose chat is the session its first send started, and nothing before.
-            destination.hasRoute<SessionRoute>() -> entry.toRoute<SessionRoute>().id
+            // A compose chat is the session its first send started, and nothing before; a tab picked in place, that tab.
+            destination.hasRoute<SessionRoute>() -> entry.shownSessionId()
                 .let { if (isComposeChatId(it)) entry.savedStateHandle.get<String>(COMPOSE_STARTED) else it }
                 ?.let(::session)
             destination.hasRoute<ConversationRoute>() -> entry.toRoute<ConversationRoute>().agentId?.let(::conversation)
             destination.hasRoute<SurfaceRoute>() -> surface(entry.toRoute<SurfaceRoute>().surfaceId)
             destination.hasRoute<AgentArtifactsRoute>() -> ARTIFACTS
+            destination.hasRoute<com.slopus.happy.ui.plugins.PluginsRoute>() -> PLUGINS
+            destination.hasRoute<com.slopus.happy.ui.pipelines.PipelinesRoute>() -> PIPELINES
             destination.hasRoute<AgentFeedRoute>() -> FEED
             destination.hasRoute<com.slopus.happy.ui.todos.TodoListsRoute>() -> TODOS
             destination.hasRoute<SettingsRoute>() -> SETTINGS

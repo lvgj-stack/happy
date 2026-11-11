@@ -47,12 +47,20 @@ val happyCloudBase = providers.environmentVariable("HAPPY_CLOUD_BASE").orNull?.t
     ?: providers.gradleProperty("happy.cloudBase").orNull?.takeIf { it.isNotBlank() }
     ?: "happy-clusters.com"
 
-// Happy Cloud's accounts service, where the person signs in and their servers
-// are listed: its own origin, apart from HAPPY_CLOUD_BASE. HAPPY_CLOUD_ACCOUNTS
+// Happy Cloud's accounts service, where the person signs in for an identity
+// token: its own origin, apart from HAPPY_CLOUD_BASE. HAPPY_CLOUD_ACCOUNTS
 // or -Phappy.cloudAccounts points a build at another one.
 val happyCloudAccounts = providers.environmentVariable("HAPPY_CLOUD_ACCOUNTS").orNull?.takeIf { it.isNotBlank() }
     ?: providers.gradleProperty("happy.cloudAccounts").orNull?.takeIf { it.isNotBlank() }
     ?: "https://auth.happy.engineering"
+
+// Happy Cloud's API, the cluster's: the account session (from the accounts
+// service's identity token), servers, server tokens and invites, and the one
+// token endpoint every Happy Cloud refresh goes to. HAPPY_CLOUD_API or
+// -Phappy.cloudApi points a build at another one; https://api.BASE otherwise.
+val happyCloudApi = providers.environmentVariable("HAPPY_CLOUD_API").orNull?.takeIf { it.isNotBlank() }
+    ?: providers.gradleProperty("happy.cloudApi").orNull?.takeIf { it.isNotBlank() }
+    ?: "https://api.$happyCloudBase"
 
 // Happy Cloud's web app, where a server's settings the phone has no page for
 // are (<name>.WEB/#/settings/<page>). HAPPY_CLOUD_WEB or -Phappy.cloudWeb points
@@ -60,6 +68,23 @@ val happyCloudAccounts = providers.environmentVariable("HAPPY_CLOUD_ACCOUNTS").o
 val happyCloudWeb = providers.environmentVariable("HAPPY_CLOUD_WEB").orNull?.takeIf { it.isNotBlank() }
     ?: providers.gradleProperty("happy.cloudWeb").orNull?.takeIf { it.isNotBlank() }
     ?: "happybases.com"
+
+// Happy Cloud's invite links (https://INVITE/#<token>), which open the app in
+// the builds that offer Happy Cloud (src/debug and src/preview's intent filter).
+// HAPPY_CLOUD_INVITE or -Phappy.cloudInvite points a build at another host.
+val happyCloudInvite = providers.environmentVariable("HAPPY_CLOUD_INVITE").orNull?.takeIf { it.isNotBlank() }
+    ?: providers.gradleProperty("happy.cloudInvite").orNull?.takeIf { it.isNotBlank() }
+    ?: "join.happy.engineering"
+
+// Sign in with Google for the Happy Cloud account: the accounts service's web
+// OAuth client (project happy-coder-9fe36), which Google's ID tokens are issued
+// to and the service checks as their audience. Public, the same for every
+// variant; Google tells the variants apart by package and signing SHA-1.
+// HAPPY_CLOUD_GOOGLE_CLIENT_ID or -Phappy.cloudGoogleClientId points a build at
+// another accounts deployment's client.
+val happyCloudGoogleClientId = providers.environmentVariable("HAPPY_CLOUD_GOOGLE_CLIENT_ID").orNull?.takeIf { it.isNotBlank() }
+    ?: providers.gradleProperty("happy.cloudGoogleClientId").orNull?.takeIf { it.isNotBlank() }
+    ?: "902947412706-bem666be0cu3ju6lnic2go91hsl256co.apps.googleusercontent.com"
 
 // The agent connection voice call's public ElevenLabs agent
 // (docs/agent-voice-call.md): never in the repository, so from the
@@ -134,7 +159,12 @@ android {
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://api.cluster-fluster.com\"")
         buildConfigField("String", "HAPPY_CLOUD_BASE", groovy.json.JsonOutput.toJson(happyCloudBase))
         buildConfigField("String", "HAPPY_CLOUD_ACCOUNTS", groovy.json.JsonOutput.toJson(happyCloudAccounts))
+        buildConfigField("String", "HAPPY_CLOUD_API", groovy.json.JsonOutput.toJson(happyCloudApi))
         buildConfigField("String", "HAPPY_CLOUD_WEB", groovy.json.JsonOutput.toJson(happyCloudWeb))
+        buildConfigField("String", "HAPPY_CLOUD_INVITE", groovy.json.JsonOutput.toJson(happyCloudInvite))
+        manifestPlaceholders["happyCloudInviteHost"] = happyCloudInvite
+        manifestPlaceholders["happyCloudWebHost"] = happyCloudWeb
+        buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", groovy.json.JsonOutput.toJson(happyCloudGoogleClientId))
         buildConfigField("String", "REVENUE_CAT_GOOGLE_KEY", groovy.json.JsonOutput.toJson(revenueCatGoogleKey))
         buildConfigField("String", "POSTHOG_KEY", groovy.json.JsonOutput.toJson(postHogKey))
         // Existing relay voice agent, retained for compatibility with installed clients.
@@ -238,6 +268,10 @@ android {
                     "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
                     "--add-opens=java.base/java.io=ALL-UNNAMED",
                 )
+                // One worker runs the whole suite. Robolectric's own share (its sandboxes, each with the
+                // framework's resources, and native text layouts it never frees) is ~400 MB of
+                // the default 512 MB by the end, which left no room for a test's own.
+                it.maxHeapSize = "1g"
             }
         }
     }
@@ -492,6 +526,9 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.browser)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.googleid)
     implementation(libs.androidx.swiperefreshlayout)
 
     implementation(platform(libs.compose.bom))

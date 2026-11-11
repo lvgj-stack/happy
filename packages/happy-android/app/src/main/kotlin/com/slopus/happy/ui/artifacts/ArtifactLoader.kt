@@ -14,6 +14,8 @@ import com.slopus.happy.artifacts.ArtifactRef
 import com.slopus.happy.artifacts.ArtifactReference
 import com.slopus.happy.artifacts.ArtifactShow
 import com.slopus.happy.artifacts.ArtifactVersion
+import com.slopus.happy.genui.RenderDocument
+import com.slopus.happy.ui.genui.readGenUi
 import com.slopus.happy.browser.BrowserException
 import com.slopus.happy.browser.BrowserFetcher
 import com.slopus.happy.browser.BrowserPolicy
@@ -21,7 +23,7 @@ import com.slopus.happy.browser.BrowserProxy
 import com.slopus.happy.browser.browserNetwork
 import com.slopus.happy.chat.markdown.MarkdownBlock
 import com.slopus.happy.chat.num
-import com.slopus.happy.chat.markdown.parseMarkdownBlocks
+import com.slopus.happy.chat.markdown.parseMarkdownDocument
 import com.slopus.happy.media.MediaLibrary
 import com.slopus.happy.ui.browser.BrowserPage
 import kotlinx.coroutines.CancellationException
@@ -47,9 +49,11 @@ sealed interface ArtifactUi {
 
     /**
      * A Markdown file, its pictures by the address it wrote, in the order
-     * they show. A version made in the last [ArtifactLoader.FRESH_DIFF_MILLIS]
-     * also carries its [text] and the version before's ([previous], labelled
-     * [previousLabel]), so it opens on what changed (desktop e10d6444).
+     * they show, and its [text] as written, which its Happy links are read
+     * from again as what they name changes. A version made in the last
+     * [ArtifactLoader.FRESH_DIFF_MILLIS] also carries the version before's
+     * ([previous], labelled [previousLabel]), so it opens on what changed
+     * (desktop e10d6444).
      */
     data class Document(
         val path: String,
@@ -73,6 +77,18 @@ sealed interface ArtifactUi {
 
     /** A file Android's WebView doesn't draw (a PDF, an office file), opened in an app that reads it. */
     data class Openable(val file: ArtifactFile) : ArtifactUi
+
+    /**
+     * A `gen_ui` version's render document, the version's pictures it names
+     * by path, and its origin agent (the agent that made the version), to
+     * whom its `message` and `secret` actions go; null for a person's version.
+     */
+    data class GenUi(
+        val version: Int,
+        val document: RenderDocument,
+        val pictures: Map<String, ArtifactMediaItem>,
+        val origin: String? = null,
+    ) : ArtifactUi
 }
 
 /** Where a tapped link in a document leads (iOS's `ArtifactViewController.open(link:)`). */
@@ -110,6 +126,8 @@ class ArtifactLoader(
     /** The connection's kept media, where the version's files are read once. */
     private val library: MediaLibrary? = null,
     private val now: () -> Long = System::currentTimeMillis,
+    /** A document's Markdown with its Happy links as they read now ([com.slopus.happy.references.HappyReferences.markdown]). */
+    private val resolve: (String) -> String = { it },
 ) {
     private val stateFlow = MutableStateFlow<ArtifactUi>(ArtifactUi.Loading)
     val state: StateFlow<ArtifactUi> = stateFlow.asStateFlow()
@@ -153,7 +171,7 @@ class ArtifactLoader(
                 }
             }
         }
-        show(version, ArtifactShow.of(version, opened?.second))
+        show(version, ArtifactShow.of(version, opened?.second, ref.type))
     } catch (e: CancellationException) {
         throw e
     } catch (_: ArtifactGoneException) {
@@ -178,8 +196,12 @@ class ArtifactLoader(
                 )
             }
             is ArtifactShow.Openable -> ArtifactUi.Openable(show.file)
+            is ArtifactShow.GenUi -> genUi(version, show.render)
         }
     }
+
+    private suspend fun genUi(version: ArtifactVersion, render: ArtifactFile): ArtifactUi =
+        readGenUi(files, version, render, media(version)) { path -> labels(false, path.substringAfterLast('/')) }
 
     /**
      * A live artifact at the URL of the version shown, http or https,
@@ -201,9 +223,9 @@ class ArtifactLoader(
         val media = media(version)
         val self = media.media(file, labels(false, file.name))
         val body = media.data(self.key) ?: throw IllegalStateException("unreadable")
-        val (raws, blocks) = withContext(Dispatchers.Default) {
+        val (text, raws, blocks) = withContext(Dispatchers.Default) {
             val text = ArtifactMarkdown.prepare(String(body, Charsets.UTF_8))
-            ArtifactMarkdown.pictures(text) to parseMarkdownBlocks(text)
+            Triple(text, ArtifactMarkdown.pictures(text), parseMarkdownDocument(resolve(text)))
         }
         val pictures = LinkedHashMap<String, ArtifactMediaItem>()
         for (raw in raws) {
@@ -219,8 +241,8 @@ class ArtifactLoader(
         val order = raws.mapNotNull { pictures[it] }.distinctBy { it.key }
         val before = previous(version)
         awaitSizes(media, order)
-        return if (before == null) ArtifactUi.Document(file.path, blocks, pictures, order)
-        else ArtifactUi.Document(file.path, blocks, pictures, order, ArtifactMarkdown.prepare(String(body, Charsets.UTF_8)), before.second, before.first)
+        return if (before == null) ArtifactUi.Document(file.path, blocks, pictures, order, text)
+        else ArtifactUi.Document(file.path, blocks, pictures, order, text, before.second, before.first)
     }
 
     /**
@@ -294,5 +316,6 @@ class ArtifactLoader(
 
         /** The most of the version before that is read to diff against. */
         const val MAX_DIFF_BYTES = 2L * 1024 * 1024
+
     }
 }

@@ -79,7 +79,7 @@ class AgentConnections(
     private val refreshing = mutableMapOf<String, Mutex>()
     /** Each connection's current grant, counted up by every sign-in: a refresh of an older one is dropped. */
     private val generations = mutableMapOf<String, Long>()
-    private val state = MutableStateFlow(readRegistry())
+    private val state = MutableStateFlow(read(registry))
     private val endpointLock = Any()
     private val endpoints = mutableMapOf<String, AgentEndpoint>()
     private val diagnosticTransports = TransportDiagnosticsRegistry()
@@ -137,9 +137,13 @@ class AgentConnections(
     /**
      * What [id]'s placeholder picture is picked by (happy-ios's
      * `placeholderSeed(for:)`): its computer's address, the same on every
-     * phone paired with it; null when its credentials are gone.
+     * phone paired with it; null when its credentials are gone. A Happy
+     * Cloud server is picked by its bare name ([HappyCloud.serverName]), as
+     * desktop's rail and the server list pick it.
      */
-    suspend fun placeholderSeed(id: String): String? = credentials(id)?.let { "agent:${it.address}" }
+    suspend fun placeholderSeed(id: String): String? = credentials(id)?.let { credential ->
+        HappyCloud.serverName(credential.publicUrl.takeIf { credential.oauth != null }) ?: "agent:${credential.address}"
+    }
 
     /**
      * Keeps a freshly paired agent. Its own name and avatar are read first
@@ -304,6 +308,19 @@ class AgentConnections(
     }
 
     /**
+     * Ends the session of every team server whose kept credential [ends]
+     * picks, as a refused refresh would ([endSession]); at launch, Happy
+     * Cloud's from an earlier build (accounts contract C9).
+     */
+    suspend fun endSessions(ends: (AgentConnection, OAuthCredential) -> Boolean) = lock.withLock {
+        for (account in state.value) {
+            if (account.sessionEnded) continue
+            val credential = withContext(Dispatchers.IO) { read(account.id)?.oauth } ?: continue
+            if (ends(account, credential)) endSession(account.id)
+        }
+    }
+
+    /**
      * [id]'s session ended: signed out, and its tokens and credentials
      * forgotten here, so nothing of the session is left on the phone ([AgentConnection.sessionEnded]);
      * its sessions and caches go with it in [com.slopus.happy.agent.AgentSessions]. Holding [lock].
@@ -430,17 +447,7 @@ class AgentConnections(
         account.avatarFile?.let { File(it).delete() }
     }
 
-    private fun read(id: String): AgentConnectionCredentials? = try {
-        secrets.getItem(id)?.let { json.decodeFromString(AgentConnectionCredentials.serializer(), it) }
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun readRegistry(): List<AgentConnection> = try {
-        registry.getString(KEY, null)?.let { json.decodeFromString<List<AgentConnection>>(it) } ?: emptyList()
-    } catch (_: Exception) {
-        emptyList()
-    }
+    private fun read(id: String): AgentConnectionCredentials? = read(secrets, id)
 
     private fun write(list: List<AgentConnection>) {
         registry.edit().putString(KEY, json.encodeToString(list)).commit()
@@ -456,5 +463,19 @@ class AgentConnections(
         /** A team server's access token is refreshed this long before it expires (edge SSO contract §1). */
         const val REFRESH_MARGIN_MILLIS = 60_000L
         private val json = Json { ignoreUnknownKeys = true }
+
+        /** The connections kept in [registry], as [accounts] starts; readable before any [AgentConnections] is made ([com.slopus.happy.agent.StartupLink]). */
+        fun read(registry: SharedPreferences): List<AgentConnection> = try {
+            registry.getString(KEY, null)?.let { json.decodeFromString<List<AgentConnection>>(it) } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        /** [id]'s credentials in [secrets]; null when gone or unreadable. Blocks on the Keystore. */
+        fun read(secrets: ExpoSecureStore, id: String): AgentConnectionCredentials? = try {
+            secrets.getItem(id)?.let { json.decodeFromString(AgentConnectionCredentials.serializer(), it) }
+        } catch (_: Exception) {
+            null
+        }
     }
 }

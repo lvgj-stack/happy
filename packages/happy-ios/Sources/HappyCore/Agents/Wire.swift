@@ -119,9 +119,17 @@ extension AgentWire {
 
     public struct Health: Equatable, Sendable, Codable {
         public struct Capabilities: Equatable, Sendable, Codable {
-            public var sidebarOperations: Bool?
             public var sidebarProposals: Bool?
             public var sidebarAttachments: Bool?
+            /// `PUT /v0/environment` and `deviceId` on sends (API.md, "User environment").
+            public var userEnvironment: Bool?
+            /// The plugin routes (`/v0/plugins`); missing is none.
+            public var plugins: Bool?
+            /// The pipeline routes (`/v0/pipelines`, `/v0/pipeline-runs`); missing is none.
+            public var pipelines: Bool?
+            /// Saves Gen UI secret actions' forms
+            /// (`POST /v0/artifacts/:id/versions/:n/actions`); missing is none.
+            public var artifactSecretActions: Bool?
         }
         public var ready: Bool
         public var capabilities: Capabilities?
@@ -371,6 +379,8 @@ extension AgentWire {
         public var items: [MediaItem]?
         /// `columns` or a `tree`, kept as sent; `MediaLayout` reads it.
         public var layout: JSONValue?
+        /// A direct `gen_ui` result: the compiled document, not an artifact reference.
+        public var document: JSONValue?
         public var artifactId: String?
         public var artifactType: String?
         public var title: String?
@@ -402,18 +412,9 @@ extension AgentWire {
         /// the service message's compaction block.
         public var tokensBefore: Double?
         public var tokensAfter: Double?
-        /// A `show_ui` call's document (`ui`); its `media` components name
-        /// `items` by index.
-        public var shownUi: PresentedUi?
-        /// A `suggest_replies` call's options (`quick_replies`).
-        public var options: [String]?
-
-        public var ui: UiDocument? { shownUi?.document }
-
         private enum CodingKeys: String, CodingKey {
-            case type, items, layout, artifactId, artifactType, title, version, shows, command, input, query, operations, files, model, output
-            case target, sources, omittedFiles, agentId, tokensBefore, tokensAfter, options
-            case shownUi = "ui"
+            case type, items, layout, document, artifactId, artifactType, title, version, shows, command, input, query, operations, files, model, output
+            case target, sources, omittedFiles, agentId, tokensBefore, tokensAfter
         }
 
         /// One `exploration` step: `list` a `target`, `read` a `name`, or
@@ -494,8 +495,9 @@ extension AgentWire {
         public init(type: String, items: [MediaItem]? = nil, layout: JSONValue? = nil, artifactId: String? = nil, artifactType: String? = nil, title: String? = nil, version: Int? = nil, shows: String? = nil,
                     command: String? = nil, input: String? = nil, query: String? = nil, operations: [Operation]? = nil, files: [DiffFile]? = nil, model: SpawnModel? = nil,
                     tokensBefore: Double? = nil, tokensAfter: Double? = nil,
-                    output: String? = nil, target: String? = nil, sources: [Source]? = nil, omittedFiles: Int? = nil, agentId: String? = nil) {
+                    output: String? = nil, target: String? = nil, sources: [Source]? = nil, omittedFiles: Int? = nil, agentId: String? = nil, document: JSONValue? = nil) {
             self.type = type; self.items = items; self.layout = layout; self.artifactId = artifactId; self.artifactType = artifactType
+            self.document = document
             self.title = title; self.version = version; self.shows = shows
             self.command = command; self.input = input; self.query = query; self.operations = operations; self.files = files; self.model = model
             self.tokensBefore = tokensBefore; self.tokensAfter = tokensAfter
@@ -507,6 +509,8 @@ extension AgentWire {
         case text(String)
         case reasoning(String)
         case image(mimeType: String, data: String)
+        /// A file a person attached, by its attachment; never its bytes.
+        case file(FileBlock)
         /// A tool call: its row, and what it showed the person. A question
         /// (`request_user_input`) keeps its raw `arguments` and result
         /// `output`, which say what was asked and answered. A call whose
@@ -515,15 +519,9 @@ extension AgentWire {
         case toolCall(id: String, name: String, status: String, presentation: Presentation?, arguments: JSONValue? = nil, output: String? = nil, result: JSONValue? = nil, review: ToolReview? = nil)
         /// One context compaction, inside a service message.
         case compaction(Compaction)
-        /// A document the daemon wrote itself (protocol 35).
-        case ui(UiDocument)
-        /// A chat UI action, in its attempt record.
-        case action(UiActionBlock)
-        /// Replies the daemon suggested itself (`quick_replies`).
-        case quickReplies([String])
         case unknown(String)
 
-        enum CodingKeys: String, CodingKey { case type, text, mimeType, data, id, name, status, presentation, arguments, result, elevated, review, ui, options }
+        enum CodingKeys: String, CodingKey { case type, text, mimeType, data, id, name, status, presentation, arguments, result, elevated, review }
         enum ResultKeys: String, CodingKey { case output }
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -536,6 +534,7 @@ extension AgentWire {
                 if let mimeType = try? container.decode(String.self, forKey: .mimeType), let data = try? container.decode(String.self, forKey: .data) {
                     self = .image(mimeType: mimeType, data: data)
                 } else { self = .unknown(type) }
+            case "file": self = (try? FileBlock(from: decoder)).map(Block.file) ?? .unknown(type)
             case "tool_call":
                 let name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
                 let asks = name == Question.toolName
@@ -558,13 +557,6 @@ extension AgentWire {
                     review: review ?? nil
                 )
             case "compaction": self = .compaction(try Compaction(from: decoder))
-            // One that can't be read is skipped, never the message.
-            case "ui":
-                if let document = try? container.decode(UiDocument.self, forKey: .ui) { self = .ui(document) } else { self = .unknown(type) }
-            case "action":
-                if let block = try? UiActionBlock(from: decoder) { self = .action(block) } else { self = .unknown(type) }
-            case "quick_replies":
-                if let options = try? container.decode([String].self, forKey: .options) { self = .quickReplies(options) } else { self = .unknown(type) }
             default: self = .unknown(type)
             }
         }
@@ -575,6 +567,9 @@ extension AgentWire {
             case .reasoning(let text): try container.encode("reasoning", forKey: .type); try container.encode(text, forKey: .text)
             case .image(let mimeType, let data):
                 try container.encode("image", forKey: .type); try container.encode(mimeType, forKey: .mimeType); try container.encode(data, forKey: .data)
+            case .file(let file):
+                try container.encode("file", forKey: .type)
+                try file.encode(to: encoder)
             case .toolCall(let id, let name, let status, let presentation, let arguments, let output, let result, let review):
                 try container.encode("tool_call", forKey: .type); try container.encode(id, forKey: .id); try container.encode(name, forKey: .name)
                 try container.encode(status, forKey: .status); try container.encodeIfPresent(presentation, forKey: .presentation)
@@ -592,15 +587,6 @@ extension AgentWire {
             case .compaction(let compaction):
                 try container.encode("compaction", forKey: .type)
                 try compaction.encode(to: encoder)
-            case .ui(let document):
-                try container.encode("ui", forKey: .type)
-                try container.encode(document, forKey: .ui)
-            case .action(let block):
-                try container.encode("action", forKey: .type)
-                try block.encode(to: encoder)
-            case .quickReplies(let options):
-                try container.encode("quick_replies", forKey: .type)
-                try container.encode(options, forKey: .options)
             case .unknown(let type): try container.encode(type, forKey: .type)
             }
         }
@@ -709,10 +695,7 @@ extension AgentWire {
         /// failure (`failure`), kept as sent; `Failure` reads them.
         public var error: JSONValue?
         public var failure: JSONValue?
-        /// The suggested reply a person's message is (`quickReply`).
-        public var quickReply: QuickReply?
-
-        public init(id: String, role: String, createdAt: Double, content: [Block], status: String? = nil, runId: String? = nil, metadata: MessageMetadata? = nil, error: JSONValue? = nil, failure: JSONValue? = nil, quickReply: QuickReply? = nil) {
+        public init(id: String, role: String, createdAt: Double, content: [Block], status: String? = nil, runId: String? = nil, metadata: MessageMetadata? = nil, error: JSONValue? = nil, failure: JSONValue? = nil) {
             self.id = id
             self.role = role
             self.createdAt = createdAt
@@ -722,23 +705,60 @@ extension AgentWire {
             self.metadata = metadata
             self.error = error
             self.failure = failure
-            self.quickReply = quickReply
         }
     }
 
     /// A message's public provenance (`metadata`): the agent that sent a
     /// message the daemon wrote on its behalf, and that agent's one line on
     /// what it is; on a team's computer, the member who wrote a person's
-    /// message (`userId`, named by `GET /v0/users`).
+    /// message (`userId`, named by `GET /v0/users`); on the notice a cluster
+    /// gives the agent that started a pipeline run once it ends, that run.
     public struct MessageMetadata: Equatable, Sendable, Codable {
         public var senderAgentId: String?
         public var senderAgentExplanation: String?
         public var userId: String?
+        public var pipelineRun: PipelineRunNotice?
 
-        public init(senderAgentId: String? = nil, senderAgentExplanation: String? = nil, userId: String? = nil) {
+        public init(senderAgentId: String? = nil, senderAgentExplanation: String? = nil, userId: String? = nil, pipelineRun: PipelineRunNotice? = nil) {
             self.senderAgentId = senderAgentId
             self.senderAgentExplanation = senderAgentExplanation
             self.userId = userId
+            self.pipelineRun = pipelineRun
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case senderAgentId, senderAgentExplanation, userId, pipelineRun
+        }
+
+        /// A `pipelineRun` this app can't read leaves the message as it
+        /// would be without one.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            senderAgentId = try container.decodeIfPresent(String.self, forKey: .senderAgentId)
+            senderAgentExplanation = try container.decodeIfPresent(String.self, forKey: .senderAgentExplanation)
+            userId = try container.decodeIfPresent(String.self, forKey: .userId)
+            pipelineRun = (try? container.decodeIfPresent(PipelineRunNotice.self, forKey: .pipelineRun)) ?? nil
+        }
+    }
+
+    /// The run a pipeline result notice tells of (`metadata.pipelineRun`):
+    /// enough to draw it without reading the run. `summary` is one line, the
+    /// failing node and why, on a run that failed.
+    public struct PipelineRunNotice: Equatable, Sendable, Codable {
+        public var runId: String
+        public var pipelineId: String
+        public var pipelineName: String?
+        public var version: Int?
+        public var state: String
+        public var summary: String?
+
+        public init(runId: String, pipelineId: String, pipelineName: String? = nil, version: Int? = nil, state: String, summary: String? = nil) {
+            self.runId = runId
+            self.pipelineId = pipelineId
+            self.pipelineName = pipelineName
+            self.version = version
+            self.state = state
+            self.summary = summary
         }
     }
 
@@ -834,20 +854,40 @@ extension AgentWire {
             public var url: String
         }
 
+        /// Who made a version (API.md, "Authors"). `kind` is absent from
+        /// daemons before authors had kinds, which name no agent.
+        public struct Author: Equatable, Sendable, Codable {
+            public var kind: String?
+            public var agentId: String?
+
+            public init(kind: String?, agentId: String? = nil) {
+                self.kind = kind
+                self.agentId = agentId
+            }
+        }
+
         public var artifactId: String
         public var number: Int
         public var title: String
         public var entry: File?
         public var files: [File]
         public var live: Live?
+        public var createdBy: Author?
 
-        public init(artifactId: String, number: Int, title: String, entry: File?, files: [File], live: Live? = nil) {
+        public init(artifactId: String, number: Int, title: String, entry: File?, files: [File], live: Live? = nil, createdBy: Author? = nil) {
             self.artifactId = artifactId
             self.number = number
             self.title = title
             self.entry = entry
             self.files = files
             self.live = live
+            self.createdBy = createdBy
+        }
+
+        /// The agent that made it, which a Gen UI version's `message` and
+        /// secret actions go to; nil when a person made it.
+        public var origin: String? {
+            createdBy?.kind == "agent" ? createdBy?.agentId : nil
         }
     }
 

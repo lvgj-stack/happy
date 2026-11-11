@@ -14,8 +14,10 @@ public enum SidebarRows {
     }
 
     /// `users`: the team members the tasks belong to, as last read, by ID.
-    /// `feed`: the Feed's row, nil for none.
-    public static func make(_ desktop: DesktopSnapshot, settings: [String: JSONValue], users: [String: TeamUser] = [:], feed: FeedRow? = nil) -> [Row] {
+    /// `feed`: the Feed's row, nil for none. `plugins`: a Happy Cloud
+    /// server's Plugins row under Artifacts. `pipelines`: its Pipelines row,
+    /// directly under Plugins, as desktop places it.
+    public static func make(_ desktop: DesktopSnapshot, settings: [String: JSONValue], users: [String: TeamUser] = [:], feed: FeedRow? = nil, plugins: Bool = false, pipelines: Bool = false) -> [Row] {
         var rows: [Row] = []
         var descendants = Set<String>()
         let tasksByID = Dictionary((desktop.tasks ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -55,6 +57,12 @@ public enum SidebarRows {
             for child in children { agentRow(child, depth: depth + 1, muted: muted) }
         }
         rows.append(Row(id: "direct:artifacts", nodeId: "direct:artifacts", kind: .space, label: "Artifacts", mark: .glyph("doc"), targetKind: "artifacts"))
+        if plugins {
+            rows.append(Row(id: "direct:plugins", nodeId: "direct:plugins", kind: .space, label: "Plugins", mark: .glyph("plugin"), targetKind: "plugins"))
+        }
+        if pipelines {
+            rows.append(Row(id: "direct:pipelines", nodeId: "direct:pipelines", kind: .space, label: "Pipelines", mark: .glyph("pipeline"), targetKind: "pipelines"))
+        }
         if let feed {
             // Bold while something is unread, with how many beside it.
             var row = Row(id: "direct:feed", nodeId: "direct:feed", kind: .space, label: "Activity", mark: .glyph("feed"), unread: feed.unread > 0, targetKind: "feed")
@@ -209,14 +217,5 @@ public enum SidebarRows {
             row.activityTime = agent.activityAt
             return row
         }
-    }
-
-    /// The members whose faces the listed tasks wear, other than the
-    /// signed-in person, whose own is the profile's; none outside a team.
-    public static func authors(_ desktop: DesktopSnapshot) -> Set<String> {
-        guard let me = desktop.profile?.userId else { return [] }
-        let joined = Set((desktop.taskMemberships ?? []).map(\.taskId))
-        let listed = (desktop.tasks ?? []).filter { joined.contains($0.id) && $0.status != "archived" }
-        return Set(listed.compactMap(\.ownerUserId)).subtracting([me])
     }
 }

@@ -6,9 +6,6 @@ import com.slopus.happy.chat.long
 import com.slopus.happy.chat.num
 import com.slopus.happy.chat.obj
 import com.slopus.happy.chat.str
-import com.slopus.happy.conversation.ui.QuickReply
-import com.slopus.happy.conversation.ui.UiActionRecord
-import com.slopus.happy.conversation.ui.UiDocument
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -111,6 +108,8 @@ sealed interface Presentation {
     /** [columns] is the grid the producer asked for (`layout` `{type: "columns", columns}`, 1 or 2), else 0: justified rows. */
     data class Media(val items: List<MediaItem>, val columns: Int = 0) : Presentation
     data class Artifact(val artifactId: String, val artifactType: String?, val title: String?, val version: Int?, val shows: String? = null) : Presentation
+    /** A compiled render document carried by this tool call, without an artifact. */
+    data class GenUi(val document: JsonElement?) : Presentation
     /** An answered question as the person was shown it, and the values they gave (`user_input`). */
     data class UserInput(val prompts: List<Question.Prompt>, val answers: Map<String, List<String>>) : Presentation
     /**
@@ -141,14 +140,6 @@ sealed interface Presentation {
     data class AgentSpawn(val model: String?) : Presentation
     /** What was typed into a background terminal (`background_terminal_interaction`), and the command it runs. */
     data class Terminal(val input: String, val command: String?) : Presentation
-    /**
-     * What `show_ui` showed: its [document], and the media its `media`
-     * components name by index among [items], null where one doesn't read.
-     * [raw] is the presentation as sent, which is what the phone keeps.
-     */
-    data class Ui(val document: UiDocument, val items: List<MediaItem?>, val raw: JsonObject) : Presentation
-    /** What `suggest_replies` suggested ([com.slopus.happy.conversation.ui.QuickReplies]); [raw] as [Ui]'s. */
-    data class QuickReplies(val options: List<String>, val raw: JsonObject) : Presentation
 
     companion object {
         fun parse(value: JsonElement?): Presentation? {
@@ -178,6 +169,7 @@ sealed interface Presentation {
                 )
                 "media" -> Media(o["items"].arr.orEmpty().mapNotNull(MediaItem::parse), columns(o["layout"]))
                 "artifact" -> Artifact(o["artifactId"].str ?: return null, o["artifactType"].str, o["title"].str, o["version"].num?.toInt(), o["shows"].str)
+                "gen_ui" -> GenUi(o["document"])
                 "user_input" -> UserInput(
                     o["questions"].arr.orEmpty().mapNotNull { value ->
                         val q = value.obj ?: return@mapNotNull null
@@ -221,8 +213,9 @@ sealed interface Presentation {
                 )
                 "agent_spawn" -> AgentSpawn(o["model"].obj?.get("name").str)
                 "background_terminal_interaction" -> Terminal(o["input"].str.orEmpty(), o["command"].str)
-                "ui" -> Ui(UiDocument.parse(o["ui"]) ?: return null, o["items"].arr.orEmpty().map(MediaItem::parse), o)
-                "quick_replies" -> QuickReplies(com.slopus.happy.conversation.ui.QuickReplies.options(o) ?: return null, o)
+                // Chat onboarding is deferred; future widgets belong in Settings, top-level
+                // MCP-app-like tools, or a general Card/Button/Text/Column UI system.
+                // Historical and unknown presentations leave the call as a generic tool row.
                 else -> null
             }
         }
@@ -318,16 +311,45 @@ sealed interface Block {
         val running: Boolean get() = status == "running"
         val failed: Boolean get() = status == "failed"
     }
-    /** A Happy Cloud attachment a message carries (`file`): its id, name, and what the server adds. */
-    data class File(val attachment: String, val name: String, val mimeType: String? = null, val size: Long? = null) : Block
+    /**
+     * An attachment a person's message carries (`file`): its id, name, and
+     * what the computer adds; Happy Cloud's older ones have no [kind] or
+     * picture fields.
+     */
+    data class File(
+        val attachment: String,
+        val name: String,
+        val mimeType: String? = null,
+        val size: Long? = null,
+        val kind: String? = null,
+        val width: Double? = null,
+        val height: Double? = null,
+        val thumbhash: String? = null,
+        val scale: Double? = null,
+    ) : Block {
+        /** As the media a tool presents: block [index] of message [messageId]. An unknown kind is a file. */
+        fun ref(messageId: String, index: Int): MediaRef = MediaRef(
+            messageId,
+            index,
+            MediaItem(
+                kind = kind?.takeIf { it in KINDS } ?: "file",
+                name = name,
+                mimeType = mimeType.orEmpty(),
+                width = width,
+                height = height,
+                scale = scale,
+                thumbhash = thumbhash,
+                size = size?.toDouble(),
+            ),
+            attachment,
+        )
+
+        private companion object {
+            val KINDS = setOf("image", "video", "document", "file")
+        }
+    }
     /** One context compaction, inside a service message: `running`, then `completed` or `failed`. */
     data class Compaction(val status: String) : Block
-    /** Chat UI the daemon wrote into an agent message (`ui`); [raw] is the block as sent, which is what the phone keeps. */
-    data class Ui(val document: UiDocument, val raw: JsonObject) : Block
-    /** One attempt at a chat UI action, the one block of its service message (`action`); [raw] as [Ui]'s. */
-    data class Action(val record: UiActionRecord, val raw: JsonObject) : Block
-    /** Replies the daemon suggested itself in an agent message (`quick_replies`); [raw] as [Ui]'s. */
-    data class QuickReplies(val options: List<String>, val raw: JsonObject) : Block
     data class Unknown(val type: String) : Block
 
     companion object {
@@ -361,13 +383,13 @@ sealed interface Block {
                 "file" -> {
                     val attachment = o["attachment"].str
                     val name = o["name"].str
-                    if (attachment != null && name != null) File(attachment, name, o["mimeType"].str, o["size"].num?.toLong()) else Unknown(type)
+                    if (attachment != null && name != null) {
+                        File(attachment, name, o["mimeType"].str, o["size"].num?.toLong(), o["kind"].str, o["width"].num, o["height"].num, o["thumbhash"].str, o["scale"].num)
+                    } else {
+                        Unknown(type)
+                    }
                 }
                 "compaction" -> Compaction(o["status"].str ?: "running")
-                // One that doesn't read is skipped as an unknown block is: the message still reads.
-                "ui" -> UiDocument.parse(o["ui"])?.let { Ui(it, o) } ?: Unknown(type)
-                "action" -> UiActionRecord.parse(o)?.let { Action(it, o) } ?: Unknown(type)
-                "quick_replies" -> com.slopus.happy.conversation.ui.QuickReplies.options(o)?.let { QuickReplies(it, o) } ?: Unknown(type)
                 else -> Unknown(type)
             }
         }
@@ -384,18 +406,18 @@ data class Message(
     val status: String? = null,
     val runId: String? = null,
     val senderAgentId: String? = null,
+    /** Why an agent wrote it, in a line: a message an agent sent itself names what it is (`metadata.senderAgentExplanation`). */
+    val senderAgentExplanation: String? = null,
+    /** A pipeline run's result told to the agent that started it (`metadata.pipelineRun`), kept as sent; [com.slopus.happy.pipelines.PipelineRunNotice] reads it. */
+    val pipelineRun: JsonObject? = null,
     /** On a team's computer, the member who wrote a person's message (`metadata.userId`, named by `GET /v0/users`). */
     val userId: String? = null,
     /** An error service message's typed failure, kept as sent. */
     val failure: JsonObject? = null,
     val error: JsonObject? = null,
-    /** A person's message that is a suggested reply: which one, as the daemon checked it on the send. */
-    val quickReply: QuickReply? = null,
 ) {
     val text: String get() = content.filterIsInstance<Block.Text>().joinToString("\n") { it.text }
 
-    /** The attempt at a chat UI action this records, where it is an attempt record: a service message of one `action` block. */
-    val attempt: UiActionRecord? get() = if (role == "service") (content.singleOrNull() as? Block.Action)?.record else null
 
     companion object {
         fun parse(value: JsonElement?): Message? {
@@ -408,10 +430,11 @@ data class Message(
                 status = o["status"].str,
                 runId = o["runId"].str,
                 senderAgentId = o["metadata"].obj?.get("senderAgentId").str,
+                senderAgentExplanation = o["metadata"].obj?.get("senderAgentExplanation").str,
+                pipelineRun = o["metadata"].obj?.get("pipelineRun").obj,
                 userId = o["metadata"].obj?.get("userId").str,
                 failure = o["failure"].obj,
                 error = o["error"].obj,
-                quickReply = QuickReply.parse(o["quickReply"]),
             )
         }
     }
@@ -421,9 +444,8 @@ data class Message(
  * A run of history: the messages one turn of work holds, oldest first, and
  * once it ended when and why (`completed`, `steering`, `abort`, `error`,
  * `compaction`). One the server stored already finished, outside any turn
- * (`kind: "standalone"`), is no turn of work: a chat UI attempt record
- * lives in one, and so does a message the server wrote itself with no run
- * open.
+ * (`kind: "standalone"`), is no turn of work: a message the server wrote
+ * itself with no run open lives in one.
  */
 data class Run(
     val id: String,
@@ -454,11 +476,11 @@ data class Run(
 }
 
 /** `GET /v0/agents/:id/messages`: whole runs, oldest first. */
-data class MessagesPage(val runs: List<Run>, val hasMore: Boolean) {
+data class MessagesPage(val runs: List<Run>, val hasMore: Boolean, val cursor: String? = null) {
     companion object {
         fun parse(value: JsonElement?): MessagesPage? {
             val o = value.obj ?: return null
-            return MessagesPage(o["runs"].arr?.mapNotNull(Run::parse) ?: return null, o["hasMore"].bool ?: false)
+            return MessagesPage(o["runs"].arr?.mapNotNull(Run::parse) ?: return null, o["hasMore"].bool ?: false, o["cursor"].str)
         }
     }
 }

@@ -4,13 +4,13 @@ import XCTest
 import HappyWire
 
 /// Back from the background, the tunnels an engine kept through the
-/// suspension look for every way to the computer again before its stream
-/// asks them for anything, as after a network change on screen.
+/// suspension look for every way to the computer again, as after a network
+/// change on screen, beside the stream's first asks rather than before them.
 @MainActor
 final class ForegroundProbeTests: XCTestCase {
-    /// A computer that answers the identity checks, refuses everything
-    /// else, and writes down what the engine asked and when its transport
-    /// was told it came back.
+    /// A computer that answers the identity checks (the open one's is its
+    /// engine's bootstrap), refuses everything else, and writes down what
+    /// the engine asked and when its transport was told it came back.
     private actor Computer: AgentTransport {
         /// How long waking its tunnels takes: a relay iOS reclaimed in the
         /// suspension, connected again over a network still coming back.
@@ -28,6 +28,10 @@ final class ForegroundProbeTests: XCTestCase {
                 try await Task.sleep(for: checking)
                 return HTTP1Response(status: 200, body: Data(#"{"ready":true,"version":{"protocol":27}}"#.utf8))
             case "/v0/config": return HTTP1Response(status: 200, body: Data(#"{"config":{"node":{"name":"Studio","avatar":null}}}"#.utf8))
+            case "/v0/bootstrap/desktop":
+                log.append(path)
+                try await Task.sleep(for: checking)
+                return HTTP1Response(status: 200, body: Data(#"{"cursor":"c1","profile":{"userId":null},"userSettings":[],"feedUnread":0,"projects":[],"workspaces":[],"health":{"ready":true,"version":{"protocol":27}},"config":{"node":{"name":"Studio","avatar":null}}}"#.utf8))
             default:
                 log.append(path)
                 return HTTP1Response(status: 503, body: Data("{}".utf8))
@@ -62,7 +66,7 @@ final class ForegroundProbeTests: XCTestCase {
         return Array(log.drop { $0 != mark }.dropFirst())
     }
 
-    func testReturningProbesTheOpenComputerBeforeItsStreamAsks() async throws {
+    func testReturningProbesTheOpenComputerAsItsStreamAsks() async throws {
         let computer = Computer()
         let manager = AgentConnections(credentials: InMemoryAgentConnectionCredentialStore(), directory: nil, makeTransport: { _ in computer })
         let account = try await manager.add(credentials("mac"), name: "Mac")
@@ -75,9 +79,9 @@ final class ForegroundProbeTests: XCTestCase {
         await computer.mark("background")
         await manager.setForeground(true)
         try await wait { await self.since("background", computer).count >= 2 }
+        try await wait { await self.since("background", computer).contains("resumed") }
         let after = await since("background", computer)
-        XCTAssertEqual(after.first, "resumed", "the engine asked before its tunnels probed: \(after)")
-        XCTAssertEqual(after.filter { $0 == "resumed" }.count, 1)
+        XCTAssertEqual(after.filter { $0 == "resumed" }.count, 1, "\(after)")
 
         // Active again without having been in the background (Control
         // Center, a system sheet): nothing kept went stale.
@@ -90,11 +94,10 @@ final class ForegroundProbeTests: XCTestCase {
 
     /// A wake that hangs on its relay holds neither the engine nor the
     /// pairing's check: the header said "connecting…" for as long as the
-    /// wake took.
+    /// wake took, and the stream and the open chat's read waited for it.
     func testASlowWakeHoldsNeitherTheEngineNorTheCheck() async throws {
         let computer = Computer(waking: .seconds(60))
         let manager = AgentConnections(credentials: InMemoryAgentConnectionCredentialStore(), directory: nil, makeTransport: { _ in computer })
-        manager.wakeLimit = .milliseconds(200)
         let account = try await manager.add(credentials("mac"), name: "Mac")
         let engine = try XCTUnwrap(manager.syncEngine(for: account.id))
         defer { Task { await engine.stop() } }
@@ -110,7 +113,25 @@ final class ForegroundProbeTests: XCTestCase {
         try await wait { await self.since("background", computer).count >= 2 }
         try await wait { manager.accounts.first?.status == .connected }
         let after = await since("background", computer)
-        XCTAssertEqual(after.first, "resumed", "the tunnels weren't woken first: \(after)")
+        XCTAssertTrue(after.contains("resumed"), "the tunnels weren't woken: \(after)")
+    }
+
+    /// Back, the open account is connecting at once, never paused, until
+    /// its engine's bootstrap says it is connected.
+    func testTheOpenAccountIsConnectingUntilItsBootstrapLands() async throws {
+        let computer = Computer()
+        let manager = AgentConnections(credentials: InMemoryAgentConnectionCredentialStore(), directory: nil, makeTransport: { _ in computer })
+        let account = try await manager.add(credentials("mac"), name: "Mac")
+        let engine = try XCTUnwrap(manager.syncEngine(for: account.id))
+        defer { Task { await engine.stop() } }
+        try await wait { manager.accounts.first?.status == .connected }
+
+        await manager.setForeground(false)
+        XCTAssertEqual(manager.accounts.first?.status, .paused)
+        await computer.slowDown(.milliseconds(500))
+        await manager.setForeground(true)
+        XCTAssertEqual(manager.accounts.first?.status, .connecting)
+        try await wait { manager.accounts.first?.status == .connected }
     }
 
     /// Back, the open computer goes first: its check answers while its own
@@ -119,7 +140,6 @@ final class ForegroundProbeTests: XCTestCase {
     func testTheOpenComputerGoesFirst() async throws {
         let other = Computer(waking: .seconds(60)), open = Computer(waking: .seconds(60))
         let manager = AgentConnections(credentials: InMemoryAgentConnectionCredentialStore(), directory: nil, makeTransport: { $0.deviceID == "other" ? other : open })
-        manager.wakeLimit = .seconds(30)
         let one = try await manager.add(credentials("other"), name: "Other")
         let oneEngine = try XCTUnwrap(manager.syncEngine(for: one.id))
         defer { Task { await oneEngine.stop() } }
@@ -136,8 +156,9 @@ final class ForegroundProbeTests: XCTestCase {
         defer { returning.cancel() }
         try await wait { manager.accounts.first { $0.id == two.id }?.status == .connected }
         XCTAssertEqual(manager.accounts.first { $0.id == one.id }?.status, .connecting, "the other computer's check should still hang")
+        try await wait { await self.since("background", open).count >= 2 }
         let woken = await since("background", open)
-        XCTAssertEqual(woken, ["resumed"], "the open engine asked before its wake or the wait: \(woken)")
+        XCTAssertEqual(woken.filter { $0 == "resumed" }.count, 1, "the open engine waited for its wake: \(woken)")
         let idle = await since("background", other)
         XCTAssertFalse(idle.contains("resumed"), "a computer not open woke its tunnels: \(idle)")
     }
@@ -163,8 +184,7 @@ final class ForegroundProbeTests: XCTestCase {
 
         try await manager.select(one.id)
         try await wait { await self.since("background", first).count >= 2 }
-        let after = await since("background", first)
-        XCTAssertEqual(after.first, "resumed", "\(after)")
+        try await wait { await self.since("background", first).contains("resumed") }
 
         // Once is enough until the next background.
         await first.mark("again")

@@ -140,6 +140,16 @@ public final class AccountController {
         return registry.entries.first { $0.id == id }?.origin != .madeForComputer
     }
 
+    /// The Happy account a computer's code goes to when it doesn't ask for
+    /// a new one: the one in use, else the one used last (the registry's
+    /// active one, kept while an agent connection is shown), else the one
+    /// added last. Nil with none signed in, or none whose server is
+    /// confirmed: then a computer's code makes one.
+    public var accountForComputer: AccountSummary? {
+        let ready = accounts.filter { !$0.isAgentConnection && $0.serverConfirmed }
+        return ready.first(where: \.isActive) ?? ready.first { $0.id == registry.activeID } ?? ready.last
+    }
+
     public var accounts: [AccountSummary] {
         let legacy = registry.entries.sorted { $0.addedOrder < $1.addedOrder }.map { entry in
             let display = entry.display
@@ -375,6 +385,8 @@ public final class AccountController {
                 return
             }
         } catch { }
+        // A Happy account opens, not the connection the launch's tunnel was for.
+        agentConnections.startup?.keep(nil)
         await restoreLegacy()
         // Nothing chosen opens: a paired computer does.
         if fallsBackToAgentConnection, showsAgentConnections, case .signedOut = state, pendingServerConfirmation == nil, let computer = agentConnections.accounts.first(where: { !$0.revoked }) ?? agentConnections.accounts.first {
@@ -1065,14 +1077,19 @@ public final class AccountController {
 
     /// Keeps a team server signed in to (`ServerSignInFlow`), or signs an
     /// account already there in again, and opens it.
-    public func addServer(_ signedIn: ServerSignInFlow.SignedIn) async throws {
+    /// `open` false only keeps it: Happy Cloud's list joins several servers,
+    /// then opens one with `switchAccount(to:)`. Returns its id.
+    @discardableResult
+    public func addServer(_ signedIn: ServerSignInFlow.SignedIn, open: Bool = true) async throws -> String {
         guard !busy else { throw AccountSwitchError.operationInProgress }
         busy = true; defer { finishOperation() }
         _ = await prepareStorageDirectory()
         let name = HappyCloud.serverName(signedIn.origin.value) ?? URLComponents(string: signedIn.origin.value)?.host ?? signedIn.origin.value
-        let account = try await agentConnections.addServer(signedIn.origin, signIn: signedIn.record, access: signedIn.access, name: name, instanceId: signedIn.instanceId)
+        let account = try await agentConnections.addServer(signedIn.origin, signIn: signedIn.record, access: signedIn.access, name: name, instanceId: signedIn.instanceId, select: open)
+        guard open else { return account.id }
         isAddingAccount = false
         try await activateAgentConnection(account.id)
+        return account.id
     }
 
     /// Shows or hides the paired computers. Hidden while one is open, the

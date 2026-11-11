@@ -43,6 +43,8 @@ class AgentSearchTest {
             is AgentFeedRow.Folder -> row.name
             is AgentFeedRow.Surface -> row.name
             AgentFeedRow.Artifacts -> "Artifacts"
+            AgentFeedRow.Plugins -> "Plugins"
+            AgentFeedRow.Pipelines -> "Pipelines"
             is AgentFeedRow.Feed -> "Activity"
             AgentFeedRow.Todos -> "Todos"
             is AgentFeedRow.Section -> null

@@ -14,6 +14,8 @@ import com.slopus.happy.connection.networkPath
 import com.slopus.happy.ui.files.workspaceSource
 import com.slopus.happy.ui.chat.rememberShownLinkState
 import com.slopus.happy.ui.page
+import com.slopus.happy.ui.plugins.openPlugin
+import com.slopus.happy.ui.pipelines.PipelineRunRoute
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +45,7 @@ import com.slopus.happy.agent.AgentApiException
 import com.slopus.happy.agent.AgentEvent
 import com.slopus.happy.agent.AgentLinkStatus
 import com.slopus.happy.agent.AgentSession
+import com.slopus.happy.agent.string
 import com.slopus.happy.agent.chiefOfStaffName
 import com.slopus.happy.chat.obj
 import com.slopus.happy.connection.RequestCategory
@@ -53,6 +56,7 @@ import com.slopus.happy.conversation.ConversationApiException
 import com.slopus.happy.conversation.ConversationKeeper
 import com.slopus.happy.conversation.ConversationRow
 import com.slopus.happy.conversation.ConversationSignal
+import com.slopus.happy.conversation.ConversationState
 import com.slopus.happy.conversation.HeldConversations
 import com.slopus.happy.conversation.RowTypesetter
 import com.slopus.happy.conversation.KeptMedia
@@ -73,6 +77,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.slopus.happy.browser.BrowserPolicy
 import com.slopus.happy.ui.artifacts.BrowserRoute
 import com.slopus.happy.ui.artifacts.InlinePages
+import com.slopus.happy.ui.genui.GenUiInline
 import com.slopus.happy.ui.artifacts.computerName
 import com.slopus.happy.ui.browser.LinkOpener
 import com.slopus.happy.ui.browser.ProvideLinks
@@ -212,9 +217,13 @@ internal fun NavHostController.heldConversation(agentId: String): Conversation? 
 }
 
 /** The agent connection's client as a conversation asks it: refusals become [ConversationApiException]. */
-internal fun AgentSession.conversationRequest(): AgentRequest = { method, path, body, category ->
+internal fun AgentSession.conversationRequest(agentId: String? = null): AgentRequest = { method, path, body, category ->
     try {
-        client.send(method, path, body, category = category)
+        if (method == "GET" && path == "/v0/config") configuration()
+        else if (method == "GET" && agentId != null && (path.endsWith("/bootstrap") || "/messages?" in path)) {
+            readChat(agentId) { client.send(method, path, body, category = category) }
+        }
+        else client.send(method, path, body, category = category)
     } catch (e: AgentApiException) {
         throw ConversationApiException(e.status, e.code, e.message, e.body as? kotlinx.serialization.json.JsonObject)
     }
@@ -229,10 +238,10 @@ internal fun AgentSession.conversationBytesRequest(): com.slopus.happy.conversat
     }
 }
 
-/** [conversationRequest] for a file's own bytes, as their type: a Happy Cloud attachment's upload. */
-internal fun AgentSession.conversationFileRequest(): com.slopus.happy.conversation.AgentFileRequest = { method, path, body, contentType ->
+/** [conversationRequest] for a file's own bytes, with their type and range: an attachment's upload. */
+internal fun AgentSession.conversationFileRequest(): com.slopus.happy.conversation.AgentFileRequest = { method, path, body, headers ->
     try {
-        client.sendBytes(method, path, body, mapOf("Content-Type" to contentType))
+        client.sendBytes(method, path, body, headers)
     } catch (e: AgentApiException) {
         throw ConversationApiException(e.status, e.code, e.message, e.body as? kotlinx.serialization.json.JsonObject)
     }
@@ -252,8 +261,12 @@ internal fun AgentSession.makeConversation(
     initialChoice: WorkChoice = WorkChoice(),
     created: () -> Unit = {},
 ): Conversation = Conversation(
-    api = ConversationApi(bytesRequest = conversationBytesRequest(), request = conversationRequest(), cloud = client.cloud, fileRequest = conversationFileRequest()),
-    signals = events.signalsFor(agentId),
+    api = ConversationApi(
+        bytesRequest = conversationBytesRequest(), request = conversationRequest(agentId), cloud = client.cloud, fileRequest = conversationFileRequest(),
+        sendingDevice = { client.environment.sendingDeviceId },
+    ),
+    signals = events.signalsFor(agentId, { event -> chatNeedsResync(agentId, event.data.string("cursor")) }),
+    initialRead = { takeChatRead(agentId) },
     // No screen's or call's: a send or draft save in flight finishes after they go.
     scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     agentId = agentId,
@@ -273,9 +286,13 @@ internal fun AgentSession.makeConversation(
     references = references,
     hasSettingsPage = settingsPages(),
     cloudFiles = client.cloud,
+    attachmentRoute = attachmentRoute,
+    keepAttachment = { id, file -> media?.store?.keep(com.slopus.happy.conversation.KeptMedia.attachmentId(agentId, id), file) },
+    here = ::isHere,
     preferences = modelPreferences,
     onStarted = ::recordStart,
     address = { ChatAddress.of(catalog.value, agentId) },
+    grouped = toolCallsGrouped,
 )
 
 /** Which settings pages this connection has ([com.slopus.happy.ui.connection.SettingsLinks]): a link to any other reads as its words. */
@@ -292,9 +309,9 @@ internal fun AgentSession.conversationKeeper(agentId: String): ConversationKeepe
 }
 
 /** The connection's journal as one conversation hears it: its own events, configuration and skill changes, and a resync on every (re)connect. */
-internal fun Flow<AgentEvent>.signalsFor(agentId: String): Flow<ConversationSignal> = mapNotNull { event ->
+internal fun Flow<AgentEvent>.signalsFor(agentId: String, needsResync: (AgentEvent) -> Boolean = { true }): Flow<ConversationSignal> = mapNotNull { event ->
     when {
-        event.type == AgentEvent.HELLO -> ConversationSignal.Resync
+        event.type == AgentEvent.HELLO -> if (needsResync(event)) ConversationSignal.Resync else null
         event.agentId == agentId -> ConversationSignal.Event(event.type, event.data)
         // The computer's configuration (its models) changed: every conversation's pickers follow.
         event.type == "config.updated" -> ConversationSignal.Event(event.type, event.data)
@@ -414,16 +431,19 @@ private fun failureShown(row: ConversationRow.Failure, address: ChatAddress) {
  * An agent connection's link as its chats' headers say it. No link is ever
  * offline: one not connected is asked again until it is, so it is
  * connecting, whatever kept it away (a computer that didn't answer, a
- * pairing to redo: home says those in words of its own). Reading the
- * snapshot is catching up, not connecting: the computer or server answered
- * (iOS's `Session.headerState`, `.connected` with the stream down).
+ * pairing to redo: home says those in words of its own). Hello ends
+ * connecting; each screen's P0 then decides whether it is catching up.
  */
 internal fun AgentLinkStatus?.linkState(syncing: Boolean, network: Boolean): LinkState = when {
     !network -> LinkState.WaitingForNetwork
+    this != null && this != AgentLinkStatus.Connected -> LinkState.Connecting
     syncing -> LinkState.Syncing
-    this == null || this == AgentLinkStatus.Connected -> LinkState.Online
-    else -> LinkState.Connecting
+    else -> LinkState.Online
 }
+
+/** A chat finishes P0 when its own history lands, independently of home's bootstrap or P2. */
+internal fun AgentLinkStatus?.conversationLinkState(state: ConversationState, network: Boolean): LinkState =
+    linkState(syncing = state.syncing || (state.created && !state.loaded), network = network)
 
 @Composable
 private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: ConversationRoute) {
@@ -446,6 +466,8 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
         try { kotlinx.coroutines.awaitCancellation() } finally { holder.hold.observe(false) }
     }
     val state by conversation.state.collectAsStateWithLifecycle()
+    com.slopus.happy.diagnostics.TimingMark("chat.rows", state.rows.isNotEmpty())
+    com.slopus.happy.diagnostics.TimingMark("chat.current", state.synced)
     // The model label warns as its account runs low, so the readings are followed while the chat shows.
     com.slopus.happy.ui.components.StartedEffect(session) {
         val following = session.usage.follow()
@@ -453,17 +475,16 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
     }
     val usage by session.usage.usage.collectAsStateWithLifecycle()
     val status by session.status.collectAsStateWithLifecycle()
-    val syncing by session.isSyncing.collectAsStateWithLifecycle()
     val settings by graph.settings.settings.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.hold.show(false) } }
     // A link in this chat browses through this chat's agent's workspace (iOS's openBrowser(session:agentID:)).
     val context = LocalContext.current
     val network by remember(context) { context.networkPath() }.collectAsStateWithLifecycle(initialValue = true)
-    val link = rememberShownLinkState(status.linkState(syncing, network))
+    val link = rememberShownLinkState(status.conversationLinkState(state, network))
     val computer = computerName(graph, route.connectionId)
     // A name a message wrote, or a Happy URL, opens what it names here.
     val happyLinks = com.slopus.happy.ui.connection.LocalHappyLinks.current
-    val references = remember(nav, session, happyLinks) { com.slopus.happy.ui.references.ReferenceOpener(nav, route.connectionId, session.references, happyLinks) }
+    val references = remember(nav, session, happyLinks) { com.slopus.happy.ui.references.ReferenceOpener(nav, route.connectionId, session.references, happyLinks, session::isHere) }
     val links = remember(nav, computer, conversation.agentId, references) {
         LinkOpener.agent(context, computer, app = references::open, opens = references::opens) { url -> nav.navigate(BrowserRoute(route.connectionId, url, conversation.agentId)) }
     }
@@ -475,13 +496,12 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
     }.collectAsStateWithLifecycle(false)
     val roleCanSend = permissions.allows(if (chief) Permission.BOTS_MANAGE else Permission.CONTENT_WRITE)
     // A command's artwork is read and kept as the agent's other pictures are.
-    ProvideLinks(links) { androidx.compose.runtime.CompositionLocalProvider(com.slopus.happy.ui.connection.LocalAgentPictures provides session.pictures) {
+    ProvideLinks(links) { androidx.compose.runtime.CompositionLocalProvider(com.slopus.happy.ui.connection.LocalAgentPictures provides session.pictures) { com.slopus.happy.ui.references.ProvideBusyLinks(references, session.references) {
         ConversationScreen(
             state = state,
             opensAttach = route.attach,
             roleCanSend = roleCanSend,
             roleCanCompose = permissions.canWrite,
-            roleAllows = permissions::allows,
             link = link,
             usage = usage,
             onRefreshUsage = session.usage::refresh,
@@ -511,13 +531,20 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
                             nav.navigate(BrowserRoute(route.connectionId, url, conversation.agentId))
                         }
                     },
+                    genUi = GenUiInline(
+                        session.client, session.media, conversation.agentId,
+                        onMessage = { words -> conversation.send(words) },
+                        onOpenWeb = { url -> nav.navigate(BrowserRoute(route.connectionId, url, conversation.agentId)) },
+                        plugins = session.pluginsAvailable,
+                        onOpenPlugin = { id -> nav.openPlugin(route.connectionId, id) },
+                    ),
                     onRetryLoad = conversation::retryLoad,
                     loadMedia = conversation::media,
                     // A recording streams a range at a time, as iOS's MediaStream asks.
                     loadMediaRange = { ref, range ->
                         session.client.send(
                             "GET",
-                            ConversationApi.mediaPath(conversation.agentId, ref.toolCallId, ref.index),
+                            ConversationApi.mediaPath(conversation.agentId, ref),
                             headers = mapOf("Range" to "bytes=${range.first}-${range.last}"),
                             category = RequestCategory.File,
                         )
@@ -526,11 +553,10 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
                     onVisible = holder.hold::show,
                     onChoiceChange = holder::setChoice,
                     onCommand = conversation::runCommand,
-                    onQuickReply = conversation::sendReply,
-                    onUiAction = conversation::press,
                     onToggleTurn = conversation::toggleTurn,
                     onToggleMessage = conversation::toggleMessage,
                     onOpenTool = { callId -> nav.navigate(ToolCallRoute(route.connectionId, conversation.agentId, callId)) },
+                    onOpenPipelineRun = { notice -> nav.navigate(PipelineRunRoute(route.connectionId, notice.runId, notice.pipelineName)) },
                     workspace = if (session.client.cloud) null else session::workspaceSource,
                     // The values typed into a secret go in this one request to the computer and nowhere else.
                     secrets = SecretRequestActions(
@@ -540,7 +566,7 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
                 )
             },
         )
-    } }
+    } } }
     state.alert?.let { problemText(it) }?.let {
         val title = stringResource(R.string.common_error)
         val ok = stringResource(R.string.common_ok)
@@ -602,7 +628,7 @@ internal fun rememberKeptMedia(graph: AppGraph, session: AgentSession, agentId: 
                 range = { ref, span ->
                     session.client.send(
                         "GET",
-                        ConversationApi.mediaPath(agentId, ref.toolCallId, ref.index),
+                        ConversationApi.mediaPath(agentId, ref),
                         headers = mapOf("Range" to MediaPiece.header(span)),
                         category = RequestCategory.File,
                     )

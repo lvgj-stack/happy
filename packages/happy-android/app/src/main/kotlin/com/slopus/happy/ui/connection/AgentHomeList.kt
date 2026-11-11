@@ -127,6 +127,8 @@ object AgentHomeTags {
     const val ROW_COUNT = "agentHome.rowCount"
     const val ROW_DIVIDER = HomeCardTags.DIVIDER
     const val ROW_DOT = "agentHome.rowDot"
+    /** The square at a row's end its status mark is centred in ([AgentHomeSpec.statusSlot]). */
+    const val ROW_STATUS = "agentHome.rowStatus"
     const val ROW_CHANGES = "agentHome.rowChanges"
     /** A Surface row's held menu: Leave. */
     const val LEAVE = "agentHome.leave"
@@ -162,8 +164,16 @@ object AgentHomeSpec {
     val tileRadius = 8.dp
     val tileGlyph = 18.dp
     val dot = HomeCardSpec.dot
-    /** Between the title and the dot. */
+    /** Between the title and the line counts after it. */
     val cornerGap = 12.dp
+    /**
+     * The square every status mark stands in, centred, ending at the row's
+     * end: as iOS's (`Metrics.statusSlot`), so its signal, question, clock
+     * and dots share one column. The title and the counts stop [statusGap]
+     * before it; its own room puts a [dot]'s ink 10 off.
+     */
+    val statusSlot = 14.dp
+    val statusGap = 8.dp
     /** The bar's title, the agent's name: smaller than Material's large title. */
     val barTitle = happyTextStyle(fontSize = 18, lineHeight = 24, weight = FontWeight.SemiBold)
     /** The compose button's margin from the window's corner, and the room under the last card to scroll it clear. */
@@ -367,6 +377,8 @@ fun LazyListScope.agentHomeRows(
     selected: String? = null,
     onOpenFeed: () -> Unit = {},
     onOpenTodos: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
+    onOpenPipelines: () -> Unit = {},
 ) {
     items(items, key = { it.key }, contentType = { (it as? AgentHomeItem.Row)?.row?.let { row -> row::class } ?: it::class }) { item ->
         val motion = if (reduceMotion) Modifier else Modifier.animateItem(
@@ -384,7 +396,7 @@ fun LazyListScope.agentHomeRows(
             // Drawn from what its line shows: a change to nothing on it composes nothing.
             is AgentHomeItem.Row -> AgentHomeCardRow(
                 item.drawn(), motion, selected != null && selected == item.row.panelKey(), AgentHomeTags.row(item.key),
-                onOpen, onOpenArtifacts, onOpenSurface, onLeaveSurface, onHold, onOpenFeed, onOpenTodos,
+                onOpen, onOpenArtifacts, onOpenSurface, onLeaveSurface, onHold, onOpenFeed, onOpenTodos, onOpenPlugins, onOpenPipelines,
             )
         }
     }
@@ -408,6 +420,8 @@ internal fun AgentHomeCardRow(
     onHold: ((AgentFeedRow.Conversation, Rect) -> Unit)? = null,
     onOpenFeed: () -> Unit = {},
     onOpenTodos: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
+    onOpenPipelines: () -> Unit = {},
 ) {
     HomeCardRow(
         place = HomeCardPlace(item.first, item.last),
@@ -421,6 +435,8 @@ internal fun AgentHomeCardRow(
             is AgentFeedRow.Conversation -> ConversationRow(row, onOpen, onHold)
             is AgentFeedRow.Folder -> FolderRow(row)
             AgentFeedRow.Artifacts -> PlaceRow(stringResource(R.string.artifacts_title), { TileMark(Ionicon.DocumentTextOutline, RowTile.Purple) }, onOpenArtifacts)
+            AgentFeedRow.Plugins -> PlaceRow(stringResource(R.string.plugins_title), { TileMark(Ionicon.ExtensionPuzzleOutline, RowTile.Orange) }, onOpenPlugins)
+            AgentFeedRow.Pipelines -> PlaceRow(stringResource(R.string.pipelines_title), { TileMark(Ionicon.GitNetworkOutline, RowTile.Teal) }, onOpenPipelines)
             is AgentFeedRow.Feed -> FeedPlaceRow(row.unread, onOpenFeed)
             AgentFeedRow.Todos -> PlaceRow(stringResource(R.string.agent_search_todos), { TileMark(Ionicon.CheckboxOutline, RowTile.Green) }, onOpenTodos)
             is AgentFeedRow.Surface -> SurfaceRow(row, { onOpenSurface(row) }, onLeaveSurface)
@@ -489,6 +505,8 @@ internal fun AgentFeedRow.panelKey(): String? = when (val row = this) {
     is AgentFeedRow.Conversation -> MainPanelKey.conversation(row.agentId)
     is AgentFeedRow.Surface -> MainPanelKey.surface(row.id)
     AgentFeedRow.Artifacts -> MainPanelKey.ARTIFACTS
+    AgentFeedRow.Plugins -> MainPanelKey.PLUGINS
+    AgentFeedRow.Pipelines -> MainPanelKey.PIPELINES
     is AgentFeedRow.Feed -> MainPanelKey.FEED
     AgentFeedRow.Todos -> MainPanelKey.TODOS
     else -> null
@@ -499,7 +517,7 @@ private fun titleStart(row: AgentFeedRow): Dp {
     val (depth, marked) = when (row) {
         is AgentFeedRow.Conversation -> row.depth to AgentHomeSpec.hasMark(row.kind)
         is AgentFeedRow.Folder -> row.depth to (row.mark != null)
-        AgentFeedRow.Artifacts, is AgentFeedRow.Feed, AgentFeedRow.Todos, is AgentFeedRow.Surface -> 0 to true
+        AgentFeedRow.Artifacts, AgentFeedRow.Plugins, AgentFeedRow.Pipelines, is AgentFeedRow.Feed, AgentFeedRow.Todos, is AgentFeedRow.Surface -> 0 to true
         is AgentFeedRow.Section -> return 0.dp
     }
     return AgentHomeSpec.markInset + AgentHomeSpec.indent * depth + if (marked) AgentHomeSpec.mark + AgentHomeSpec.markGap else 0.dp
@@ -507,8 +525,9 @@ private fun titleStart(row: AgentFeedRow): Dp {
 
 /**
  * One conversation, on one line: a bot's or task's 30 mark, the title 17/22
- * (desktop's sheen while it runs, [AgentFeedRow.Conversation.running]),
- * and a 10 dot 12 after it while it waits or is unread. No time. The whole
+ * (desktop's sheen while it runs, [AgentFeedRow.Conversation.running];
+ * cut with its last 14 fading where it runs out of room, [com.slopus.happy.ui.components.TitleFade]),
+ * and a 10 dot in its status slot while it waits or is unread. No time. The whole
  * row opens it.
  */
 @Composable
@@ -559,11 +578,12 @@ private fun ConversationRow(row: AgentFeedRow.Conversation, onOpen: (String) -> 
                 baseColor = colors.text,
                 highlightColor = ShimmerSpec.sheen(colors.text, colors.surfaceHigh),
                 shimmering = row.running,
+                fade = true,
                 modifier = Modifier.wrapContentHeight(unbounded = true).agentTitleBaseline(),
             )
         }
         WorkspaceCounts(row.lineChanges)
-        Corner(row.blocked, row.unread, row.lineChanges?.visible == true)
+        Corner(row.blocked, row.unread)
     }
 }
 
@@ -605,7 +625,7 @@ private fun FeedPlaceRow(unread: Int, onClick: () -> Unit) {
     PlaceRow(stringResource(R.string.feed_title), { TileMark(Octicon.Pulse, RowTile.Red) }, onClick, count = count, countLabel = label)
 }
 
-/** Artifacts, the Feed, or a Surface: its [mark] (a glyph on its tile), and its name; bold with a [count] after it while something in it is unread. */
+/** Artifacts, the Feed, or a Surface: its [mark] (a glyph on its tile), and its name, its end fading where it runs out of room ([com.slopus.happy.ui.components.TitleFade]); bold with a [count] after it while something in it is unread. */
 @Composable
 private fun PlaceRow(name: String, mark: @Composable () -> Unit, onClick: () -> Unit, onLongClick: (() -> Unit)? = null, count: Int? = null, countLabel: String? = null) {
     Row(
@@ -616,12 +636,13 @@ private fun PlaceRow(name: String, mark: @Composable () -> Unit, onClick: () -> 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(modifier = Modifier.size(AgentHomeSpec.mark).testTag(AgentHomeTags.ROW_MARK)) { mark() }
-        Text(
+        ShimmerText(
             name,
             style = if (count != null) AgentHomeSpec.title.copy(fontWeight = FontWeight.SemiBold) else AgentHomeSpec.title,
-            color = HappyTheme.colors.text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            baseColor = HappyTheme.colors.text,
+            highlightColor = HappyTheme.colors.text,
+            shimmering = false,
+            fade = true,
             modifier = Modifier
                 .padding(start = AgentHomeSpec.markGap)
                 .weight(1f)
@@ -645,8 +666,9 @@ private fun PlaceRow(name: String, mark: @Composable () -> Unit, onClick: () -> 
 }
 
 /**
- * A project or a worktree: its name, shimmering while work runs inside it,
- * and a project's mark before it ([FolderMarkView]). It opens nothing.
+ * A project or a worktree: its name, shimmering while work runs inside it
+ * and fading at its end where it runs out of room ([com.slopus.happy.ui.components.TitleFade]), and a
+ * project's mark before it ([FolderMarkView]). It opens nothing.
  */
 @Composable
 private fun FolderRow(row: AgentFeedRow.Folder) {
@@ -674,6 +696,7 @@ private fun FolderRow(row: AgentFeedRow.Folder) {
                 baseColor = colors.text,
                 highlightColor = ShimmerSpec.sheen(colors.text, colors.surfaceHigh),
                 shimmering = row.running,
+                fade = true,
                 modifier = Modifier.wrapContentHeight(unbounded = true).agentTitleBaseline(),
             )
         }
@@ -696,28 +719,36 @@ private fun WorkspaceCounts(changes: WorkspaceLineChanges?) {
             if (changes.deletions > 0) "−${compactCount(changes.deletions)}" else null,
         ),
         color = HappyTheme.colors.textSecondary,
-        modifier = Modifier.padding(start = 8.dp).testTag(AgentHomeTags.ROW_CHANGES)
+        modifier = Modifier.padding(start = AgentHomeSpec.cornerGap).testTag(AgentHomeTags.ROW_CHANGES)
             .clearAndSetSemantics { contentDescription = exact },
     )
 }
 
 /**
  * A dot at the row's end while it needs something: orange waiting, blue
- * unread; nothing otherwise (home shows no times). The title gives way to
- * it, on the same line, so the row's height never changes.
+ * unread; nothing otherwise (home shows no times). It is centred in the
+ * row's [AgentHomeSpec.statusSlot], so the dots stand in one column. The
+ * title gives way to it, on the same line, so the row's height never changes.
  */
 @Composable
-private fun Corner(blocked: Boolean, unread: Boolean, hasCounts: Boolean = false) {
+private fun Corner(blocked: Boolean, unread: Boolean) {
     if (!blocked && !unread) return
     val label = stringResource(if (blocked) R.string.status_input_required else R.string.status_unread)
-    StatusDot(
-        color = if (blocked) BlockedDotColor else UnreadDotColor,
-        size = AgentHomeSpec.dot,
+    Box(
         modifier = Modifier
-            .padding(start = if (hasCounts) 6.dp else AgentHomeSpec.cornerGap)
-            .semantics { contentDescription = label }
-            .testTag(AgentHomeTags.ROW_DOT),
-    )
+            .padding(start = AgentHomeSpec.statusGap)
+            .size(AgentHomeSpec.statusSlot)
+            .testTag(AgentHomeTags.ROW_STATUS),
+        contentAlignment = Alignment.Center,
+    ) {
+        StatusDot(
+            color = if (blocked) BlockedDotColor else UnreadDotColor,
+            size = AgentHomeSpec.dot,
+            modifier = Modifier
+                .semantics { contentDescription = label }
+                .testTag(AgentHomeTags.ROW_DOT),
+        )
+    }
 }
 
 /** The list itself; [header] rows (a banner) go above the conversations. */
@@ -737,6 +768,8 @@ fun AgentHomeList(
     selected: String? = null,
     onOpenFeed: () -> Unit = {},
     onOpenTodos: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
+    onOpenPipelines: () -> Unit = {},
 ) {
     val reduceMotion = rememberReduceMotion()
     // The call brings a conversation's row on screen here before it presses it ([VoiceTouch.rows]).
@@ -756,7 +789,7 @@ fun AgentHomeList(
         contentPadding = contentPadding,
     ) {
         header?.invoke(this)
-        agentHomeRows(items, reduceMotion, onOpen, onOpenArtifacts, onOpenSurface, onLeaveSurface, onHold, selected, onOpenFeed, onOpenTodos)
+        agentHomeRows(items, reduceMotion, onOpen, onOpenArtifacts, onOpenSurface, onLeaveSurface, onHold, selected, onOpenFeed, onOpenTodos, onOpenPlugins, onOpenPipelines)
         item(key = "bottom", contentType = "bottom") { bottom() }
     }
 }

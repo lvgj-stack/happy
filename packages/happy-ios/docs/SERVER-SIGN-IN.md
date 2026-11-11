@@ -81,101 +81,210 @@ checked.
 
 ## Happy Cloud
 
-Happy Cloud has one account service, `https://auth.happy.engineering/`,
-and any number of servers, each a team server at `https://<name>.<base>/`.
-Both are compiled into the app (`HappyCloud.accounts`, `HappyCloud.base`,
+Happy Cloud has one accounts service, `https://auth.happy.engineering/`,
+which only signs people in: it turns a sign-in with Apple, Google, GitHub
+or an emailed code into a five-minute OpenID Connect identity token. The
+cluster's API, `https://api.<base>/`, trades that for the account's
+session and does everything else: the servers, invites and every token
+after sign-in. The servers are team servers at `https://<name>.<base>/`.
+All three are compiled into the app (`HappyCloud.accounts`,
+`HappyCloud.api`, `HappyCloud.base`,
 `Sources/HappyCore/ServerSignIn/HappyCloud.swift`) and can't be edited.
-The contract shared with Android, desktop and the backend is Happy Cloud
-accounts and servers v1, with v4's token lifetimes.
+The contract shared with Android, desktop and the backend is the accounts
+split contract (v1, frozen 2026-11-15).
 
-- **Where.** "Connect to Happy Cloud" in the account switcher's menu (the
-  list of accounts and servers, under Add) and in the scanner's and first
-  screen's ⋯ (`AccountAdding.connectToCloud`). The first screen also has
-  "Use Happy Cloud" above Start, with the same width and emphasis.
-  Development and preview builds only (`HappyCloud.isOffered`, from
-  `AppVariant`): production shows
-  none of these entries and `connectToCloud` does nothing there.
-- **Screens.** Every Happy Cloud step is a full-screen page in the
-  onboarding's look (`CloudStageViewController`: the grain gradient, large
-  title, one primary button at the bottom, no tables or alerts): Welcome,
-  Your Servers, Name Your Server, Join a Server, Connecting. With no
-  account yet it's pushed on the first screen; otherwise it's presented
-  full screen with a Close button.
-- **Welcome.** "Connect to Happy Cloud?" ("Sign in or create an account
-  to add a cloud team. Agents run in the cloud; no computer needed.") with
-  Sign in with Apple's own button as the primary action and Other Ways to
-  Sign In under it. While the account's pass lasts, the flow opens on Your
-  Servers instead.
-- **Account sign-in** (`CloudAccount`). Either way it ends in a pass: an
-  account token whose `aud` must be the accounts origin, good for an hour,
-  with no refresh token.
-  - *Sign in with Apple* (`CloudApple`): `ASAuthorizationAppleIDProvider`
-    asking for the name and email, its `nonce` the SHA-256 of a fresh
-    random one. `POST /v1/auth/native` gets `provider` `apple`, the
-    identity token, the raw nonce, the authorization code and, when Apple
-    gives it (the first time only), the person's full name. The
-    `com.apple.developer.applesignin` entitlement is on the development
-    and preview apps.
-  - *Other ways*: authorization code + PKCE S256 at
+- **Where.** "Use Happy Cloud", a text action under the first screen's
+  Start, and "Connect to Happy Cloud" in the account switcher's menu (the
+  list of accounts and servers, under Add) and in Settings
+  (`AccountAdding.connectToCloud`). Not in any ⋯: the first screen has
+  none, and the next screens' and the scanner's ⋯ hold the self-hosted
+  ways in only. Development and preview builds only
+  (`HappyCloud.isOffered`, from `AppVariant`): production shows none of
+  these entries and `connectToCloud` does nothing there.
+- **Screens.** Desktop's steps and words (happy-desktop
+  `CloudConnectScreen.tsx`), every one a full-screen page on the first
+  screen's grain gradient, under the standard bar with Back: Welcome, Sign
+  in, Join a server, Bootstrap a server, Connecting.
+  With no account yet it's pushed on the first screen; otherwise it's
+  presented full screen with a Close button. Android has the same steps
+  and copy.
+- **Welcome** (`CloudWelcomeViewController`, `CloudWelcomeLayout`).
+  Desktop's five Cloud slides (`CLOUD_SLIDES`: Happy Cloud, Built for lots
+  of agents, Programmable permissions, No lock-in, Private open source,
+  over the Happy mark, 🤖, 🔒, ✨ and 👐) in the first screen's gallery at
+  its place, moving on every 12 s, and Continue where Start is. Continue
+  signs in, or, while the account's session lasts, goes straight to Join a
+  server. Opened again after the session ended, a note over Continue says so.
+- **Sign in** (`CloudSignInViewController`, `CloudAccount`): "Sign in or
+  create your Happy Cloud account.", with four buttons, all native to the
+  app (Apple, Google, GitHub, then email); there is no other way and no
+  chooser page. Every way ends in an identity token from the accounts
+  service, `{ id_token, expires_in }`, whose `aud` must be the app's client,
+  `happy` (read, not verified: the API verifies it), or it is dropped
+  before it goes anywhere. `POST https://api.<base>/v1/session`
+  `{ id_token }` trades it for the account's session (below); a 401 there
+  (`invalid_token`: expired, already used) is a failed sign-in, said as the
+  API words it.
+  - *Sign in with Apple* (`CloudApple`): Apple's own button.
+    `ASAuthorizationAppleIDProvider` asking for the name and email, its
+    `nonce` the SHA-256 of a fresh random one. `POST /v2/auth/native` gets
+    `provider` `apple`, the identity token, the raw nonce, the
+    authorization code and, when Apple gives it (the first time only), the
+    person's full name. The `com.apple.developer.applesignin` entitlement
+    is on the development and preview apps.
+  - *Sign in with GitHub*: authorization code + PKCE S256 at
     `auth.happy.engineering/authorize`, `client_id` `happy`, the usual
-    redirect, and `resource` the accounts origin, in
-    `ASWebAuthenticationSession` with
-    `prefersEphemeralWebBrowserSession = false`. A refresh token, if one
-    came, is dropped.
+    redirect, `scope=openid` and no `resource`, and `provider=github`, which
+    makes the accounts service skip its own chooser and redirect straight
+    to GitHub (`provider=apple` would do the same for Apple; an unknown
+    name shows the chooser). It opens in `ASWebAuthenticationSession`, the
+    app's own sheet, with `prefersEphemeralWebBrowserSession = true`: no
+    Safari cookie comes in, so after Back signs the account out Continue can
+    pick another GitHub account, and iOS asks no "wants to use … to sign
+    in" first; passwords and passkeys still fill. The code goes to the
+    accounts service's `/token`, which answers the identity token.
+  - *Continue with email* (`CloudEmailViewController`,
+    `CloudEmailCodeViewController`, `Screens/CloudEmailSignInScreen.swift`):
+    a one-time code by email (WorkOS Magic Auth behind the accounts
+    service), with no browser, a filled button 12 under GitHub's, as wide.
+    Two steps, each on the gradient like the rest:
+    1. *Sign in with email*: the address (`.emailAddress`), then Send code,
+       `POST /v2/auth/email/start` `{ email }`, answered `202 {}`.
+    2. *Check your email*: "Enter the 6-digit code we sent to …", a field
+       with `.oneTimeCode` and the number pad, so Mail's code fills it. It
+       keeps digits only, six at most, and the sixth checks the code at
+       once: `POST /v2/auth/email/verify` `{ email, code }` answers the
+       same identity token as `/v2/auth/native`, traded for the session the
+       same way, then Join a server in the
+       place of the welcome and both steps, as after every sign-in. Resend code waits 60 s
+       after each code sent, its title counting down ("Resend code in
+       0:42"); Change email goes back to the address, kept.
+
+    Refusals are `{ code, error }`, said under the field: `400
+    invalid_email`, `400 invalid_code` and `502 unavailable` in the
+    service's words (ours when it gives none); a wrong code is cleared.
+    `400 unsupported_provider` (email sign-in not set up) reads "Email
+    sign-in isn’t available yet. Sign in with Apple or GitHub."
+    (`Strings.CloudEmail.failure`). `429 rate_limited` says its `error` and
+    makes the button that asked wait `retryAfter` seconds (else the
+    `Retry-After` header's, else a minute), counting down in its title:
+    Send code, Verify or Resend code (`CloudAccountError.rateLimited`).
   - *A test account* (`CloudTestSignIn`), for testing every surface without
-    Apple or GitHub: ten taps on Welcome's logo within four seconds make a
-    login and password form, which isn't there before. `POST
-    /v1/auth/password` with `{ login, password }` answers the same pass;
-    401 `invalid_credentials` and 429 `locked` (`retryAfter` seconds) are
-    said under it. The password is only in its secure field and that
-    request, cleared once signed in. Development and preview builds only,
-    as Happy Cloud is. Operators make these accounts; see the cloud's
-    TESTAUTH.md.
-  - The pass is held in memory only, with its expiry, and never refreshed.
-    Opening the flow after it ends, a minute early, or a 401 from any
-    accounts call goes straight back to Welcome, with no retry. Earlier
-    builds' Keychain item (`happy-ios:cloud-account`) is deleted.
-- **The picker** (`CloudServersViewController`). Your servers
-  (`GET /v1/servers`) as cards; Create a New Server opens Name Your Server
-  (a name under `.<base>`, checked as it's typed with
-  `GET /v1/servers/availability`, then `POST /v1/servers`); Join with an
-  Invite opens Join a Server (name and invite code,
-  `POST /v1/servers/join`). A server already connected is switched to.
-  Each row is titled with the server's `displayName` (its node name), with
-  `@name` under it, and shows its picture: the ThumbHash at once,
-  then the bytes from the listed image `url` under the account token (only
-  ever on the accounts origin), or the generated avatar seeded by the
-  server's id when it has none.
-- **Connecting** asks the accounts service for the server's own tokens,
-  `POST /v1/servers/:id/token` under the pass: no browser. The access
+    Apple or GitHub: ten taps on the welcome's Happy mark within four
+    seconds open Sign in with a login and password form, which isn't there
+    otherwise. `POST /v2/auth/password` with `{ login, password }` answers
+    the same identity token; 401 `invalid_credentials` and 429 `locked`
+    (`retryAfter` seconds) are said under it. The password is only in its
+    secure field and that request, cleared once signed in. Development and
+    preview builds only, as Happy Cloud is. Operators make these accounts;
+    see the cloud's TESTAUTH.md.
+  - The session (`CloudAccount`) is an access token for the API, an hour,
+    and a refresh token, 30 days, held in memory only and never stored. Its
+    access token goes only to the API. One with a minute or less left is
+    refreshed before use, and a 401 refreshes it once at the API's `/token`
+    (`refresh_token` grant, `client_id` `happy`, `resource` the API) and
+    repeats the request; concurrent requests share one refresh, and a
+    rotated refresh token replaces the old one. The API refusing the
+    refresh, or a second 401, goes back to the welcome, which says the
+    sign-in ended. A refresh that fails on the network, a 5xx or a 429
+    keeps the session: the screen says "Happy Cloud couldn't be reached.
+    Check your connection and try again." and stays. Earlier builds'
+    Keychain item (`happy-ios:cloud-account`) is deleted.
+- **Join a server** (`CloudServersViewController`): "Your account is
+  already on these servers. Join as many as you like." Each of the
+  account's servers (`GET /v1/servers`) is a row with its picture, its
+  `displayName` (its node name) over `@name`, and Join, which signs this
+  phone in to it as Connecting does but stays on the list; once in, the row
+  says Joined with a check (as it does for a server already on the phone).
+  Joins run one after another, Back is held while one runs, and Continue
+  appears once one is in and opens the last joined. Under the list, a
+  quiet link: Bootstrap a new one. An account with no server opens on
+  Bootstrap a server instead. There is no join with a code: an invite is a
+  private link (`https://happybases.com/join#<token>`) accepted on the web,
+  so the list loads again whenever the app comes back to the foreground,
+  and the first Bootstrap gives way to the list once the account has a
+  server. Back from Join a server,
+  or from that first Bootstrap, signs the account out (revokes the session),
+  so Continue can use another. The picture is the ThumbHash at once, then
+  the bytes from the listed image `url` under the session's token (only
+  ever on the API's origin), or the generated placeholder seeded by the
+  server's name, as desktop's rail and the connection's own avatar are.
+- **Bootstrap a server** (`CloudCreateViewController`): a name under
+  `.<base>`, checked as it's typed with `GET /v1/servers/availability`
+  ("@acme is available", "is taken.", "is reserved.", in a line kept
+  whether or not it says anything); Bootstrap, enabled once the name is
+  free, `POST /v1/servers`, then straight into it. Connecting takes the
+  step's place (over Join a server when there is one), so Back never
+  returns to a step that is done.
+- **Connecting** (after Bootstrap; Join on the list does the
+  same in place) asks the API for the server's own tokens,
+  `POST /v1/servers/:id/token` under the session: no browser. The access
   token's `aud` must be `https://<name>.<base>/`, built from the listed
   name and the app's own base, never from the listed `url`. Its refresh
   token is the lasting session, kept as any server's below and refreshed
-  at `auth.happy.engineering/token` (`refresh_token` grant, `client_id`
-  `happy`, `resource` the server) without the account. Then, as after any
-  sign-in, the server is asked who signed in, its installation is
-  recorded, and the connection is added. The account token goes only to
-  the accounts service.
+  at `https://api.<base>/token` (`refresh_token` grant, `client_id`
+  `happy`, `resource` the server) without the account. The access token's
+  `aud` may also name the cluster (`[https://<name>.<base>/,
+  https://<base>/]`); it is enough that one entry names the server. Then,
+  as after any sign-in, the server is asked who signed in, its
+  installation is recorded, and the connection is added. The session's
+  token goes only to the API.
 - **Your name.** A member the server has no profile for yet
   (`GET /v0/authentication` with `userId: null`) is asked "What's your
   name?" before the connection is added. The field is prefilled with the
   name Apple gave this sign-in (only on an Apple ID's first authorization;
   in memory only), else the server's suggestion, which is
   `GET /v0/profile`'s `name` while the profile is unsaved. What they give
-  is saved with `PATCH /v0/profile`. If they cancel, the screen says the
+  is saved with `PATCH /v0/profile`, then the server is kept and opens
+  from that screen, the flow ending over it: nothing pops back to
+  Connecting or the list first. If they cancel, the screen says the
   server needs a name and offers Try Again. The app never makes a name
   up. A connected cloud server whose onboarding still says the member's
   `profile` step isn't done (`Onboarding.needsName`) asks the same over
   home, once a launch, with Not Now. A name in the profile alone decides
   nothing.
-- **Sign-in methods.** Apple natively and GitHub on the browser page
-  (Other Ways); no Google or email anywhere in the app.
+- **Nothing moves but for the keyboard** (`CloudStageViewController`).
+  - A status, error or helper line keeps two lines' room whether or not
+    it says anything, and each step is centred by its steady measure, so
+    a failure, a countdown, "Checking…" or a taken name moves nothing;
+    the list arriving on Join a server grows down from where the spinner
+    was. The welcome keeps the note's room over its buttons.
+  - A step that types (email, code, test account, Bootstrap, Join with an
+    invite, Your name) is pushed with its keyboard (`KeyboardPush`): the
+    push and the keyboard start together, and the step follows the
+    keyboard from its will-change notification on its own duration and
+    curve, in one animation, as the chat's composer does; while a finger
+    drags the keyboard down it follows the layout guide. Between two
+    steps that type (Send code, Change email, I have an invite) the
+    keyboard stays up and only changes kind; back to one that doesn't, it
+    goes down with the pop.
+  - A step done for good is replaced, never pushed over or popped through
+    (`CloudScreens.replace`): signed in by any way, Join a server takes
+    the place of the welcome and every sign-in step, wearing the flow's
+    Close; a server made or joined, Connecting takes Bootstrap's or the
+    invite's.
+  - `HostedCloudSignInMotionTests` reads every display frame of each of
+    these from the presentation layers, the keyboard's top included.
+- **Sign-in methods.** Apple and Google natively, GitHub in the app's own
+  sheet, straight to GitHub, and a code by email typed in the app.
 - **Sign Out of Happy Cloud**, in the account switcher's menu while the
-  pass is held, forgets the pass. The servers stay connected.
+  session is held, ends it: nothing more goes under it, and its refresh
+  token is revoked at the API, `POST /revoke` (RFC 7009), best effort.
+  Back out of the flow, or another sign-in, does the same
+  (`CloudScreens.account`). The servers stay connected.
 - **Removing a cloud server** drops it on the phone and revokes its
-  session at the accounts service: `POST /revoke` (RFC 7009) with its
+  session at the API: `POST https://api.<base>/revoke` (RFC 7009) with its
   refresh token and `client_id`, best effort
-  (`AgentConnections.revokeIfCloud`).
+  (`AgentConnections.revokeIfCloud`). Only a grant the API issued goes
+  there.
+- **Servers an earlier build joined.** Their refresh tokens came from the
+  accounts service, which refreshes nothing since the split. At launch
+  (`AgentConnections.restore`) a cloud server whose grant doesn't refresh
+  at `https://api.<base>/token` ends like any ended session (below), with
+  nothing sent: home shows "Signed out of @name" with Sign In, which
+  opens Happy Cloud. Nothing stored is rewritten. An earlier build itself
+  is told by the accounts service to update: `410 update_required` on
+  `/v1/auth/*`.
 - **No scanned code.** The scan-only rule exists so that no one can send a
   person's sign-in to a server by a link or a pasted address. Cloud
   addresses come from the app's base, so the rule doesn't apply to them,
@@ -202,7 +311,7 @@ accounts and servers v1, with v4's token lifetimes.
   Happy bot is as before: not renamed here, and onboarding not read.
 - **Roles.** A cloud session reads `GET /v0/permissions` (`Permissions`)
   at once, on `role.*`, on a resync and on every reconnect (a role
-  changed at the accounts service lands with the next token). Only
+  changed in the cluster lands with the next token). Only
   `granted` decides: `Session.gate` (`RoleGate`) is `.open` on a computer
   and, on a cloud server, allows nothing until read and keeps what was
   read if a read fails, so no control is shown only to be refused.
@@ -362,9 +471,11 @@ refusal and WebSocket upgrade:
 - on Happy Cloud, a second Happy `401` after a refresh is also
   `unavailable`. Only the authorization server refusing the refresh token
   ends a Happy Cloud session;
-- the rest, or a refresh the authorization server refuses, sets
-  `ServerAuthorization.state = .needsSignIn`. A refresh that fails only on
-  the network keeps the grant.
+- the rest, or a refresh the authorization server refuses (a 4xx other
+  than 429), sets `ServerAuthorization.state = .needsSignIn`. A refresh
+  that fails on the network, or that the token endpoint answers with a
+  5xx or a 429 (an edge's rate limit or challenge, HTML or JSON), keeps
+  the grant (`OAuthError.network`).
 
 A 403 with Happy's JSON is an ordinary permission error.
 
@@ -412,6 +523,29 @@ Previews (the in-app browser's workspace proxy) need a tunnel.
   pings. A tunnel is dead after 45 s with nothing inbound. Tunnels can't be
   resumed: WebKit opens a new one.
 
+## Time zone and language
+
+A computer whose health says `capabilities.userEnvironment` is told this
+phone's environment (happy-agent API.md, "User environment"), so its
+agents know the person's time zone, languages, clock, first weekday and
+calendar.
+
+- `PUT /v0/environment` with `deviceId`, the installation's id
+  (`ExpoInstallationID`, the push exchange's, lowercased), and
+  `deviceKind` `phone` or `tablet`. A field iOS can't name in the API's
+  terms is left out, because one bad field refuses the whole report
+  (`UserEnvironment.current`).
+- Sent when an engine starts, when the app comes back to the foreground
+  (`AgentConnections.resume`), and when the time zone or locale changes.
+  It is sent only when it differs from what that computer was last told.
+  A failed report goes again at the next start, and a 404 stops the
+  reports.
+- Sends name the device (`deviceId`) only once the computer takes
+  reports. An older one refuses the whole send otherwise
+  (`UserEnvironmentReports.sendingDeviceId`).
+- A computer without the capability is asked for its health again at
+  each start, so one updated while the app runs starts getting reports.
+
 ## Instance links
 
 A Happy link that leaves the app names the installation it came from:
@@ -438,7 +572,7 @@ ported from happy-agent-client's `happyLinks.ts`.
   agent's message one is drawn as a link and opens where
   `SettingsLinkPlace` says: `general` Settings, `account` Profile, `voice`
   the computer's Voice row, `servers` Happy Cloud's servers (Settings off
-  Happy Cloud). `providers` opens the native AI providers list on Cloud.
+  Happy Cloud). `providers` opens the native Inference list (the AI providers) on Cloud.
   Its `add` chooser offers the server's ChatGPT sign-in, a Claude setup
   token when enabled (Claude's only way in: no browser sign-in, whatever
   the server says), and OpenAI, Anthropic and Grok API keys.
@@ -455,17 +589,31 @@ ported from happy-agent-client's `happyLinks.ts`.
   link opens nothing here is its label as words; a malformed one asking
   to be a button is too. The Markdown parser reads a link's title apart
   from its destination (`LegacyMarkdown.link`).
-- **Entity links in a conversation** (`[label](happy://agents/…)`, found
-  by `HappyMarkdownLinks` as happy-agent-client's `parseHappyLinks` finds
-  them) read as desktop's `messageReferencesResolve`: the live name wins,
-  and the written label stands in while it is read and for what this
-  phone can't look up. `HappyReferences.markdown` turns each into the
-  same reference link a `<happy-KIND/>` tag becomes. An agent or
-  workspace the bots and tasks hold opens its conversation, an artifact
-  its viewer, and a Surface its screen (`SurfaceScreens`). A person is a
-  mention, and a project or service is words. A link naming another
-  installation is its label as words. The bots, tasks and Surfaces come
-  from the account's bootstrap (`SyncEngine` → `Store.externalDirectory`).
+- **Entity links in a conversation** (`[](happy://agents/…)` or a
+  link.happy.page share link, found by `HappyMarkdownLinks` as
+  happy-agent-client's `parseHappyLinks` finds them) read as the live name
+  of what they name, whatever words they were written with (those go stale
+  on a rename); a person as "@" and their name. What nothing here names
+  (gone, archived, another server's) reads as the placeholder ("an
+  unavailable agent"), never the words. A bare share link shows its
+  address. `HappyReferences.markdown` puts the name in the link's words and
+  leaves its address exactly as written: where a link goes is read from
+  that address as it is drawn (`ChatLinks.kind`), and copying gives the
+  message as written. One that resolves on the conversation's server opens
+  in the app: an agent or workspace the bots and tasks hold its
+  conversation, an artifact its viewer, a Surface its screen
+  (`SurfaceScreens`), and a link to a conversation at work carries the
+  sidebar's shimmer (`ChatSheen`, desktop's `sheen`). An unresolved share
+  link stays tappable and goes through instance-link routing ("not
+  connected"); an unresolved `happy://` link is plain words. As on desktop,
+  a file link shows its path and a settings link "Settings" when written
+  without words. A `<happy-KIND/>` tag reads the same way. An artifact's
+  Markdown document is the exception: a link written with words keeps
+  them, resolved or not (`keepingLabels`), and still opens and shimmers
+  where it resolves; only an empty `[]` reads as the name or placeholder.
+  Links and code inside bold or italic keep that style. The bots, tasks
+  and Surfaces come from the account's bootstrap (`SyncEngine` →
+  `Store.externalDirectory`).
 - **File links** (`happy://agents/<id>/files/<path>#L<n>`) are read when
   tapped (`AgentClient.linkedFile`: the agent's workspace, then
   `GET /v0/workspaces/:id/file`), then shown read-only by
@@ -497,6 +645,28 @@ Access tokens are unsigned JWTs for `https://localhost:8443/`;
 `/control/split` advertises a token URL on another site (`/control/bind`
 undoes it).
 It accepts only `happy://oauth/callback`, PKCE S256 and the `resource`.
+
+`ServerSignInTests` also covers Happy Cloud's account sign-ins: Apple's,
+a test account's, and email's two requests with every refusal and the
+`429` wait from the body or the header. `CloudEmailScreensTests`
+(HappyUIKitTests) covers email's steps: the welcome's button, Send code,
+the code field, Resend code's and a `429`'s countdowns, Change email, and
+the servers after the right code.
+
+`scripts/cloud-email-mock/server.mjs` plays the accounts service's email
+routes (`/v2/auth/email/*`, identity tokens; `/v1/auth/*` answers `410
+update_required`) and the API's session, `/token`, `/revoke` and servers
+list over plain HTTP on 8790 (a fixed code, `123456`; special addresses
+for each refusal; a `429` after three codes a minute or three wrong
+codes). `scripts/cloud-email-mock/run-device-test.sh` (on a Mac) starts it
+and runs `CloudEmailSignInUITests` on a connected phone or a simulator
+(`DEVICE`) in the chat harness, whose `-cloudAccounts <origin>` sends the
+welcome's sign-ins and the API's calls there, then exports the
+screenshots. On a
+phone whose UI automation can't be turned on, the harness's own
+`-cloudScreen email -cloudName <address> -cloudSend -cloudCode <code>`
+fills the address, taps Send code and types the code through the same
+screens and requests, for `devicectl` screenshots.
 
 `Tests/HappyWireTests/ServerLinkTests.swift`: the server code's grammar,
 formatting, and every malformed form. `ScanRouteTests` routes it from any

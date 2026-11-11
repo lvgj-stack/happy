@@ -7,13 +7,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Happy Cloud's addresses: the accounts service and each server, all under one BASE. */
+/** Happy Cloud's addresses: the accounts service, the cluster's API and each server under one BASE. */
 class HappyCloudTest {
     private fun connection(id: String, server: String?, addedAt: Long = 0) = AgentConnection(id = id, name = id, addedAt = addedAt, server = server)
 
     @Test
     fun accountsHaveTheirOwnOriginAndServersLiveUnderBase() {
         assertEquals(BuildConfig.HAPPY_CLOUD_ACCOUNTS.removeSuffix("/"), HappyCloud.accounts?.value)
+        // The cluster's API, apart from the accounts service: api.BASE unless the build says otherwise.
+        assertEquals(BuildConfig.HAPPY_CLOUD_API.removeSuffix("/"), HappyCloud.api?.value)
         assertEquals("https://auth.happy.engineering", HappyCloud.originOf("https://auth.happy.engineering/")?.value)
         assertNull(HappyCloud.originOf("https://auth.happy.engineering/v1"))
         assertNull(HappyCloud.originOf("http://auth.happy.engineering"))
@@ -49,6 +51,15 @@ class HappyCloudTest {
         assertNull(HappyCloud.handle("https://a.b.happy.computer", base))
         assertNull(HappyCloud.handle("https://happy.acme.example", base))
         assertNull(HappyCloud.handle(null, base))
+    }
+
+    /** What a server's placeholder is picked by, on every client: its bare name. */
+    @Test
+    fun aServersNameIsItsHandleWithoutTheAt() {
+        val base = "happy.computer"
+        assertEquals("acme", HappyCloud.serverName("https://acme.happy.computer", base))
+        assertNull(HappyCloud.serverName("https://a.b.happy.computer", base))
+        assertNull(HappyCloud.serverName("https://happy.acme.example", base))
     }
 
     @Test

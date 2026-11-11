@@ -20,12 +20,6 @@ import com.slopus.happy.chat.num
 import com.slopus.happy.chat.obj
 import com.slopus.happy.chat.str
 import com.slopus.happy.connection.AgentConnectionException
-import com.slopus.happy.conversation.ui.QuickReply
-import com.slopus.happy.conversation.ui.UiAction
-import com.slopus.happy.conversation.ui.UiActions
-import com.slopus.happy.conversation.ui.UiComponent
-import com.slopus.happy.conversation.ui.UiOffer
-import com.slopus.happy.conversation.ui.UiPresses
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -41,6 +35,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -87,6 +82,13 @@ data class ConversationState(
     val loaded: Boolean = false,
     /** Bootstrap and newest history are being refreshed, including after a reconnect. */
     val syncing: Boolean = false,
+    /**
+     * The agent's history has been read since this conversation began following its events, and none were lost
+     * since: what shows is current, not only what this phone kept ([loaded] is true for that too).
+     */
+    val synced: Boolean = false,
+    /** When the agent's history was last read in full (ms since 1970), here or by what was kept; null if never. */
+    val syncedAt: Long? = null,
     val rows: List<ConversationRow> = emptyList(),
     val hasMore: Boolean = false,
     val loadingOlder: Boolean = false,
@@ -184,6 +186,12 @@ class Conversation(
      * yet.
      */
     private val cloudFiles: Boolean = false,
+    /** Whether the computer takes attachments, as its connection found: shared by its conversations. */
+    private val attachmentRoute: AttachmentRoute = AttachmentRoute(),
+    /** Keeps an uploaded attachment's bytes where its tile reads them, so the sender never downloads its own; called on [io]. */
+    private val keepAttachment: (id: String, file: File) -> Unit = { _, _ -> },
+    /** Whether an installation is this conversation's connection's ([ConversationRowBuilder.here]). */
+    private val here: ((String) -> Boolean)? = null,
     /** The person's model preferences: a new chat opens on their start ([ModelPreferences.startMode]); null, on the catalog's default. */
     private val preferences: StateFlow<ModelPreferences>? = null,
     /** A new chat's first message went with this mode: it is the session's start. */
@@ -193,12 +201,17 @@ class Conversation(
     /** Where its analytics go: [Analytics], or a test's list. */
     private val record: (AnalyticsEvent) -> Unit = Analytics::record,
     private val errorShown: (ErrorArea, ErrorCode) -> Unit = Analytics::errorShown,
+    private val initialRead: suspend () -> Pair<Bootstrap, MessagesPage>? = { null },
+    /** Group tool calls ([ToolSections]), as the phone's Appearance says; null keeps every call a row of its own. */
+    private val grouped: StateFlow<Boolean>? = null,
 ) {
     /**
-     * A send on its way: the person's [text], its pictures inline and its
-     * [files] for the workspace; [wire] is the text that goes, naming the
-     * files ([WorkspaceUploads.text]), and the one drawn, so the message
-     * reads the same before and after the computer has it.
+     * A send on its way: the person's [text], its pictures and its [files].
+     * To a computer that takes attachments every one goes as one
+     * ([attachments]); to an older one the pictures go inline and the files
+     * into the workspace, and [wire] is the text that goes, naming the files
+     * ([WorkspaceUploads.text]), and the one drawn, so the message reads the
+     * same before and after the computer has it.
      */
     private class Outgoing(
         val id: String,
@@ -206,14 +219,14 @@ class Conversation(
         /** Fewer once a picture is taken out on its way ([removePicture]). */
         var images: List<Block.Image>,
         var files: List<OutgoingFile> = emptyList(),
+        /** [images]' own files, one each in their order, where they came from the composer. */
+        var pictureFiles: List<OutgoingFile> = emptyList(),
         /** A tool the agent runs before it reads this (a skill's `read_skill`). */
         var toolRequest: ToolRequest? = null,
         /** New work's first words as one of the computer's skills: it asks for that skill once the agent made offers it ([skillRequested]). */
         var skill: String? = null,
         /** A voice call's words ([sendAs]). */
         val voice: Boolean = false,
-        /** A suggested reply tapped ([sendReply]): [text] is its option, exactly. */
-        val quickReply: QuickReply? = null,
         var accepted: Boolean = false,
         var failure: Problem? = null,
         val sentAt: Long,
@@ -256,19 +269,24 @@ class Conversation(
         named = this@Conversation.references?.let { reader -> reader::read }
         pages = this@Conversation.references?.let { reader -> reader::readArtifacts }
         hasPage = hasSettingsPage
+        here = this@Conversation.here
     }
     private val runs = ArrayList<Pair<String, MutableList<String>>>()
     /** Each run's status, start and end as last read, so it is kept as it came. */
     private val runInfo = HashMap<String, RunInfo>()
     /** Finished turns opened on their work ([toggleTurn]). */
     private val expanded = HashSet<String>()
+    /** Turns shown before they ended: one that then ends was watched to its end. */
+    private val unended = HashSet<String>()
+    /** Turns watched to their end, which keep their rows under Group tool calls until folded ([TurnFold]'s quiet). */
+    private val settling = HashSet<String>()
+    /** The tool sections seen ending, by key: they stay ended ([ToolSections]). */
+    private val sectionsEnded = HashSet<String>()
     /** A person's long messages opened past their first lines ([toggleMessage]), by row key. */
     private val opened = HashSet<String>()
     private val messages = HashMap<String, Message>()
     private val pending = ArrayList<String>()
     private val outgoing = ArrayList<Outgoing>()
-    /** Chat UI presses from here, and the refusals that are still news ([press]). */
-    private val presses = UiPresses(ConversationApi::clientId)
     private var agent: AgentInfo? = null
     private var mode: Mode? = null
     private var picked: Mode? = null
@@ -329,6 +347,8 @@ class Conversation(
             }
             // Preferences changed on another device: an unpicked new chat follows them.
             preferences?.let { flow -> launch { flow.collect { if (adoptStartMode()) publish() } } }
+            // Group tool calls turned on or off: the rows follow at once.
+            grouped?.let { flow -> launch { flow.drop(1).collect { publish() } } }
             if (created) reload() else readSkills()
             signals.collect { signal ->
                 // The computer's models changed, or may have while away: the pickers read them again.
@@ -339,7 +359,11 @@ class Conversation(
                     return@collect
                 }
                 when (signal) {
-                    ConversationSignal.Resync -> reload()
+                    ConversationSignal.Resync -> {
+                        // Some were lost: not current again until the read is in.
+                        publish { it.copy(synced = false) }
+                        reload()
+                    }
                     is ConversationSignal.Event -> held?.add(signal) ?: receive(signal)
                 }
             }
@@ -366,7 +390,8 @@ class Conversation(
                 reconciling?.cancel()
                 skillsReading?.cancel()
                 held = null
-                publish { it.copy(syncing = false, loadingOlder = false) }
+                // No longer following its events: not current until it reads again.
+                publish { it.copy(syncing = false, synced = false, loadingOlder = false) }
             }
         }
     }
@@ -425,7 +450,10 @@ class Conversation(
             publish { it.copy(syncing = true) }
             try {
                 // Their own scope: a failed read is this read's failure, not the conversation's.
-                val (start, read) = coroutineScope {
+                val prepared = initialRead()
+                val (start, read) = if (prepared != null) {
+                    prepared.first to HistoryRead(prepared.second.runs, prepared.second.hasMore, null)
+                } else coroutineScope {
                     val bootstrap = async { api.bootstrap(agentId) }
                     val messages = async { readHistory() }
                     bootstrap.await() to messages.await()
@@ -439,8 +467,20 @@ class Conversation(
                 events.forEach(::receive)
                 // Kept rows show over a failed read; only an empty chat says it.
                 if (_state.value.rows.isEmpty()) errorShown(ErrorArea.ConversationLoad, AnalyticsReasons.error(e))
-                publish { it.copy(loaded = true, syncing = false, error = describe(e)) }
+                publish { it.copy(loaded = true, syncing = false, synced = false, error = describe(e)) }
             }
+        }
+    }
+
+    /**
+     * Someone needs it current (a voice call's read): a history read that failed is asked for again now, rather than
+     * at the next resync. One on its way, or one that went, is left alone.
+     */
+    fun catchUp() {
+        scope.launch(lane) {
+            if (!created || closed || !observing || reading?.isActive == true) return@launch
+            if (snapshot.synced || snapshot.error == null) return@launch
+            reload()
         }
     }
 
@@ -503,7 +543,7 @@ class Conversation(
         }
         agent = agent ?: kept.agent
         mode = picked ?: mode ?: kept.mode
-        publish { it.copy(loaded = true, hasMore = kept.hasMore, commands = kept.slashCommands ?: it.commands) }
+        publish { it.copy(loaded = true, hasMore = kept.hasMore, commands = kept.slashCommands ?: it.commands, syncedAt = kept.syncedAt ?: it.syncedAt) }
     }
 
     private fun putRun(run: Run) {
@@ -554,7 +594,7 @@ class Conversation(
         val events = held.orEmpty()
         held = null
         events.forEach(::receive)
-        publish { it.copy(loaded = true, syncing = false, hasMore = read.hasMore, error = null, commands = start.slashCommands ?: it.commands) }
+        publish { it.copy(loaded = true, syncing = false, synced = true, syncedAt = now(), hasMore = read.hasMore, error = null, commands = start.slashCommands ?: it.commands) }
         if (start.agent.pendingQuestionId != null) readQuestion() else publish { it.copy(question = null) }
         if (visible) markRead()
         keepSoon()
@@ -585,6 +625,7 @@ class Conversation(
             agent = agent,
             mode = mode,
             slashCommands = snapshot.commands,
+            syncedAt = snapshot.syncedAt,
         )
         try {
             withContext(disk + NonCancellable) { keeper.write(kept.json()) }
@@ -643,7 +684,6 @@ class Conversation(
         when (event.type) {
             "message.created", "message.updated" -> {
                 val message = Message.parse(payload["message"]) ?: return
-                hear(message)
                 messages[message.id] = message
                 outgoing.removeAll { it.id == message.id }
                 uploads.clear(message.id)
@@ -764,7 +804,8 @@ class Conversation(
     /** Opens a finished turn on its work, or folds it again. */
     fun toggleTurn(turn: String) {
         scope.launch(lane) {
-            if (!expanded.remove(turn)) expanded += turn
+            // A turn watched to its end folds first; after that it opens and folds as any.
+            if (!(grouped?.value == true && settling.remove(turn)) && !expanded.remove(turn)) expanded += turn
             publish()
         }
     }
@@ -855,81 +896,6 @@ class Conversation(
         true
     }
 
-    /**
-     * Sends option [index] of the suggestion [replies]: an ordinary send of
-     * the option's words, exactly, with `quickReply` naming it, in order
-     * with the composer's sends. The draft is left as it is. Nothing goes
-     * where the option isn't there, or from a stack that takes no tap now
-     * ([ConversationRow.Replies.live]), so a second tap sends nothing.
-     */
-    fun sendReply(replies: ConversationRow.Replies, index: Int) {
-        val text = replies.options.getOrNull(index) ?: return
-        scope.launch(lane) {
-            if (closed || snapshot.rows.none { it is ConversationRow.Replies && it.key == replies.key && it.live }) return@launch
-            queue(Outgoing(ConversationApi.clientId(), text, emptyList(), quickReply = replies.reply(index), sentAt = now()))
-            publish()
-            pump()
-        }
-    }
-
-    /**
-     * Sends a chat UI component's [action] on its [offer] to the actions
-     * route. No bubble: the component is busy until the press is answered,
-     * and shows what was refused ([UiWork]), as the answer's attempt record
-     * says or the refusal of the request itself. Nothing goes where the
-     * offer isn't in the transcript, its component doesn't take the action
-     * ([UiActions.takes]), or a press of the offer is already on its way.
-     *
-     * Only the action's redacted form is kept while it goes ([UiPresses]).
-     * The answer's `result` is not read, for no action this build sends has
-     * one. An action that has is where a result store joins: kept here by
-     * offer and published with the row, never held in a row's composition,
-     * which a lazy list drops as it scrolls away.
-     */
-    fun press(offer: UiOffer, action: UiAction) {
-        scope.launch(lane) {
-            if (!created || closed) return@launch
-            val row = snapshot.rows.firstOrNull { it is ConversationRow.Ui && it.offer == offer } as ConversationRow.Ui? ?: return@launch
-            if (!UiActions.takes(row.component, action)) return@launch
-            val id = presses.begin(offer, action) { it in messages } ?: return@launch
-            publish()
-            try {
-                val record = withRetries { api.act(agentId, id, offer, action) }
-                presses.answered(offer)
-                hear(record)
-                join(record)
-                keepSoon()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // Turned down, nothing was recorded. Unanswered, the same press again is the same attempt.
-                val problem = describe(e)
-                if (e is ConversationApiException && e.status in 400..499) presses.refused(offer, action, problem) else presses.lost(offer, id, action, problem)
-            }
-            publish()
-        }
-    }
-
-    /**
-     * A message the computer answered with joins history. Its run is the
-     * events' to announce (`run.finished`, then `message.created`), so until
-     * they have it waits among the messages no run holds yet.
-     */
-    private fun join(message: Message) {
-        messages[message.id] = message
-        if (message.id !in pending && runs.none { message.id in it.second }) pending += message.id
-    }
-
-    /**
-     * A message that came while the chat is open, in an event or as a
-     * press's answer, before it replaces what was known: an attempt record
-     * that says something new is news for its component ([UiPresses.heard]).
-     */
-    private fun hear(message: Message) {
-        val record = message.attempt ?: return
-        if (record.outcome != messages[message.id]?.attempt?.outcome) presses.heard(record)
-    }
-
     /** The newest run that is a turn, which may still be going: a standalone run ([Run.standalone]) is none. */
     private fun lastTurn(): String? = runs.lastOrNull { runInfo[it.first]?.standalone != true }?.first
 
@@ -969,7 +935,7 @@ class Conversation(
                 return@launch
             }
             if (!created) locked = true
-            queue(Outgoing(id, trimmed, images, files, sentAt = now(), waiting = pending.takeIf { it.isNotEmpty() }))
+            queue(Outgoing(id, trimmed, images, files, pictureFiles(inline), sentAt = now(), waiting = pending.takeIf { it.isNotEmpty() }))
             setDraftNow("")
             publish()
             if (pending.isEmpty()) pump() else read(id, attachments.size, pending, readPictures)
@@ -1023,6 +989,7 @@ class Conversation(
         try {
             val (inline, files) = WorkspaceUploads.split(id, kept, first)
             if (inline.isNotEmpty()) send.images = send.images + readPictures(inline.map { WorkspaceUploads.localFile(it.uri) })
+            send.pictureFiles = send.pictureFiles + pictureFiles(inline)
             send.files = send.files + files
         } catch (e: Exception) {
             send.failure = Problem.PicturesUnreadable
@@ -1134,8 +1101,7 @@ class Conversation(
         scope.launch(lane) {
             val send = outgoing.firstOrNull { it.id == id && it.failure != null } ?: return@launch
             outgoing.remove(send)
-            // A suggested reply's words were never typed: nothing goes back to the composer.
-            if (send.quickReply == null && draft.isBlank() && send.text.isNotEmpty()) {
+            if (draft.isBlank() && send.text.isNotEmpty()) {
                 setDraftNow(send.text)
                 publish { it.copy(draftArrivals = it.draftArrivals + 1) }
             } else {
@@ -1160,19 +1126,32 @@ class Conversation(
                     ensureCreated()
                     made = true
                     val mode = sendingMode() ?: throw IllegalStateException("No model is set up on this computer.")
-                    val attachments = upload(next.files)
-                    val images = next.images
+                    // Pictures inline and files in the workspace only where the computer takes no attachments.
+                    val attached = attachments(next)
+                    val attachments = attached ?: upload(next.files)
+                    val images = if (attached == null) next.images else emptyList()
+                    // The words go as this try went, whatever the route's memory says by the time they do.
+                    val text = wire(next, attaching = cloudFiles || attached != null)
                     skillRequested(next)
-                    val message = withRetries {
-                        // The bytes of each picture's base64 written say how far it is.
-                        var ranges: UploadRanges? = null
-                        val progress = com.slopus.happy.connection.BodyProgress { body, sent ->
-                            val found = ranges ?: UploadRanges(body, images.map { it.data }).also { ranges = it }
-                            found.shares(sent).forEachIndexed { index, share ->
-                                uploads.set(UploadBoard.pictureKey(next.id, index), if (share >= 1f) UploadPhase.Done else UploadPhase.Uploading(share))
+                    val deliver: suspend (List<SentAttachment>) -> Message? = { files ->
+                        withRetries {
+                            // The bytes of each picture's base64 written say how far it is.
+                            var ranges: UploadRanges? = null
+                            val progress = com.slopus.happy.connection.BodyProgress { body, sent ->
+                                val found = ranges ?: UploadRanges(body, images.map { it.data }).also { ranges = it }
+                                found.shares(sent).forEachIndexed { index, share ->
+                                    uploads.set(UploadBoard.pictureKey(next.id, index), if (share >= 1f) UploadPhase.Done else UploadPhase.Uploading(share))
+                                }
                             }
+                            withContext(progress) { api.send(agentId, next.id, text, images, mode, next.toolRequest, files) }
                         }
-                        withContext(progress) { api.send(agentId, next.id, wire(next), images, mode, next.toolRequest, attachments, next.quickReply) }
+                    }
+                    val message = try {
+                        deliver(attachments)
+                    } catch (e: ConversationApiException) {
+                        // An upload the computer let go of before the message went (unsent for 24 h): checked and sent again once.
+                        if (attached == null || e.code != "attachment_not_found") throw e
+                        deliver(attachments(next) ?: throw e)
                     }
                     // All there, whatever the transport told on the way; the echo clears them.
                     images.indices.forEach { uploads.set(UploadBoard.pictureKey(next.id, it), UploadPhase.Done) }
@@ -1230,6 +1209,7 @@ class Conversation(
             }
             if (send.accepted) return@launch pump()
             send.images = send.images.filterIndexed { i, _ -> i != index }
+            send.pictureFiles = send.pictureFiles.filterIndexed { i, _ -> i != index }
             // What is left starts again under its new keys.
             uploads.clear(id)
             if (send.text.isEmpty() && send.images.isEmpty() && send.files.isEmpty() && send.toolRequest == null) outgoing.remove(send)
@@ -1276,12 +1256,55 @@ class Conversation(
         return files.map { SentAttachment(it.attachmentId!!, it.name) }
     }
 
-    /** What [send] says: on Happy Cloud its words, its files going beside them; else with the paths it wrote them to. */
-    private fun wire(send: Outgoing): String = if (cloudFiles) send.text else WorkspaceUploads.text(send.text, send.files)
+    /**
+     * A send's pictures and files as the agent's attachments
+     * ([AttachmentUploads]): a retry goes on from what the computer holds,
+     * and one already uploaded is only asked after, since an unsent upload
+     * expires. Each picture's ring follows its bytes, and its bytes are kept
+     * for its tile. Null for a send with neither, and where the computer has
+     * no attachments route, which is remembered for its connection a while.
+     */
+    private suspend fun attachments(send: Outgoing): List<SentAttachment>? {
+        if (attachmentRoute.missing) return null
+        val pictures = send.pictureFiles
+        val all = pictures + send.files
+        // Pictures without files of their own can only go inline.
+        if (all.isEmpty() || pictures.size != send.images.size) return null
+        val sizes = withContext(io) { all.map { it.file.length() } }
+        all.zip(sizes).firstOrNull { (_, size) -> size > AttachmentUploads.MAX_SIZE }?.let { (file, _) -> throw FileTooLarge(file.name) }
+        all.forEachIndexed { index, file ->
+            val key = UploadBoard.pictureKey(send.id, index).takeIf { index < pictures.size }
+            val size = sizes[index].coerceAtLeast(1)
+            file.attachmentId = try {
+                api.attach(agentId, file, io, retryDelayMillis) { sent -> key?.let { uploads.set(it, UploadPhase.Uploading(sent.toFloat() / size)) } }
+            } catch (e: AttachmentRouteMissing) {
+                // Only a send's first request tells: once any is in, the computer has the route.
+                if (all.any { it.attachmentId != null }) throw e
+                attachmentRoute.markMissing()
+                return null
+            } catch (e: ConversationApiException) {
+                if (e.status == 413) throw FileTooLarge(file.name)
+                throw e
+            }
+            key?.let { uploads.set(it, UploadPhase.Done) }
+            withContext(io) { runCatching { keepAttachment(file.attachmentId!!, file.file) } }
+        }
+        return all.mapIndexed { index, file -> SentAttachment(file.attachmentId!!, file.name, picture = index < pictures.size) }
+    }
 
-    /** [send] as its bubble reads until the agent has it: its files listed by name on Happy Cloud, else by path. */
+    /** The composer's [inline] pictures as files of their own, for a computer that takes them as attachments. */
+    private fun pictureFiles(inline: List<AttachmentPreview>): List<OutgoingFile> =
+        inline.map { OutgoingFile(WorkspaceUploads.localFile(it.uri), it.name, it.mimeType, it.size, path = "") }
+
+    /** Files go as attachments: on Happy Cloud, and to a computer with the route. */
+    private val attaches: Boolean get() = cloudFiles || !attachmentRoute.missing
+
+    /** What [send] says: its words where its files go as attachments beside them ([attaching]); else with the paths it wrote them to. */
+    private fun wire(send: Outgoing, attaching: Boolean): String = if (attaching) send.text else WorkspaceUploads.text(send.text, send.files)
+
+    /** [send] as its bubble reads until the agent has it: its files listed by name where they go as attachments, else by path. */
     private fun shown(send: Outgoing): String =
-        if (cloudFiles) WorkspaceUploads.listed(send.text, send.files.map { it.name }) else wire(send)
+        if (attaches) WorkspaceUploads.listed(send.text, send.files.map { it.name }) else wire(send, attaching = false)
 
     /**
      * New work's first `/skill args` ([Outgoing.skill]) asks for the skill
@@ -1413,7 +1436,6 @@ class Conversation(
     /** Reads the computer's models again (`config.updated`, a reconnect): hidden accounts and models, names, windows. */
     private fun rereadCatalog() {
         scope.launch(lane) {
-            val mark = presses.mark()
             val found = try {
                 api.catalog()
             } catch (e: CancellationException) {
@@ -1422,13 +1444,9 @@ class Conversation(
                 return@launch
             }
             catalogRead = null
-            // Asked for after it, the default model is newer than any refusal to change it.
-            val settled = presses.read(UiComponent.DefaultModel.TYPE, mark)
             if (found != catalog) {
                 catalog = found
                 adoptStartMode()
-                publish()
-            } else if (settled) {
                 publish()
             }
         }
@@ -1459,7 +1477,6 @@ class Conversation(
     /** The computer's models, read once; a failed read is asked again next time. */
     private suspend fun readCatalog(): ModeCatalog {
         catalog?.let { return it }
-        val mark = presses.mark()
         val read = catalogRead ?: scope.async(lane) { api.catalog() }.also { catalogRead = it }
         val found = try {
             read.await()
@@ -1471,7 +1488,6 @@ class Conversation(
         }
         if (catalog == null) {
             catalog = found
-            presses.read(UiComponent.DefaultModel.TYPE, mark)
             adoptStartMode()
             publish()
         }
@@ -1565,7 +1581,7 @@ class Conversation(
     }
 
     /** A tool's presented item, read whole. */
-    suspend fun media(ref: MediaRef): ByteArray = api.media(agentId, ref.toolCallId, ref.index)
+    suspend fun media(ref: MediaRef): ByteArray = api.media(agentId, ref)
 
     /** The tool call [callId] as this conversation holds it now, and where it is in history; null where it holds none. */
     suspend fun toolCall(callId: String): LocatedCall? = withContext(lane) {
@@ -1703,24 +1719,6 @@ class Conversation(
         }
     }
 
-    /** Every message the computer has, in order: each run's, then those waiting for one. */
-    private fun history(): List<Message> = (runs.flatMap { it.second } + pending).mapNotNull(messages::get)
-
-    /**
-     * Lays over each chat UI row how its actions go ([UiWork]): the press
-     * on its way from here, whether the newest attempt on its offer by
-     * anyone is still pending, and a refusal that is still news.
-     */
-    private fun workOn(rows: MutableList<ConversationRow>) {
-        val newest = HashMap<UiOffer, Boolean>()
-        for (message in history()) message.attempt?.let { newest[it.offer] = it.outcome.pending }
-        rows.replaceAll { row ->
-            if (row !is ConversationRow.Ui) return@replaceAll row
-            val work = UiWork(presses.sending(row.offer), newest[row.offer] == true, presses.problem(row.offer))
-            if (work == row.work) row else row.copy(work = work)
-        }
-    }
-
     private fun derive(base: ConversationState): ConversationState {
         val agent = agent
         val working = running || agent?.isWorking == true || outgoing.any { it.accepted }
@@ -1728,16 +1726,17 @@ class Conversation(
         val rows = ArrayList<ConversationRow>()
         val lastRun = lastTurn()
         val waiting = base.question
+        val grouped = grouped?.value == true
+        // Under Group tool calls, the calls of a turn opened on its traces are each a row.
+        val apart = HashSet<String>()
         for ((runId, ids) in runs) {
             val streaming = working && runId == lastRun
             val turn = ArrayList<ConversationRow>()
             var tools = 0
-            val replies = QuickReplyPlacement()
             for (id in ids) messages[id]?.let { message ->
                 if (message.role == "agent") tools += message.content.count { it is Block.ToolCall }
-                replies.add(turn, message.role, settled(sentAt(builder.rows(message, agentId, parentAgentId, streaming && message.role == "agent")), waiting))
+                turn += settled(sentAt(builder.rows(message, agentId, parentAgentId, streaming && message.role == "agent")), waiting)
             }
-            replies.place(turn)
             val info = runInfo[runId]
             // A standalone run is no turn: what the server wrote in it stands as it is, with no end and no fold.
             if (info?.standalone == true) {
@@ -1746,6 +1745,7 @@ class Conversation(
             }
             // Ended: how, after how long, and the answer to copy (desktop's `turnStatus`); then it folds.
             val endedAt = info?.endedAt
+            if (endedAt == null) unended += runId else if (unended.remove(runId)) settling += runId
             if (endedAt != null) {
                 val at = turn.indexOfLast { it is ConversationRow.Text }
                 val answer = (turn.getOrNull(at) as? ConversationRow.Text)?.text
@@ -1762,7 +1762,16 @@ class Conversation(
                 if (ended.complete && answer != null) turn[at] = (turn[at] as ConversationRow.Text).copy(copies = false)
                 turn += ended
             }
-            rows += TurnFold.fold(runId, turn, runId in expanded)
+            if (grouped) {
+                // One copy button a turn: its end's, or, where the end offers none, its last words'. A turn still
+                // running shows none, so words never lose a button (and their row its height) as more come.
+                val end = turn.lastOrNull() as? ConversationRow.TurnEnd
+                val last = if (end != null && !end.complete) turn.indexOfLast { it is ConversationRow.Text } else -1
+                for (i in turn.indices) (turn[i] as? ConversationRow.Text)?.takeIf { it.copies && i != last }?.let { turn[i] = it.copy(copies = false) }
+            }
+            val folded = TurnFold.fold(runId, turn, runId in expanded, grouped, quiet = grouped && runId in settling)
+            if (grouped && runId in expanded) folded.forEach { apart += it.key }
+            rows += folded
         }
         // A question waiting on the person is pinned to the end, under the work; a secret's form stays over the composer.
         if (waiting != null && waiting.secret == null) {
@@ -1773,18 +1782,21 @@ class Conversation(
             }
             rows += ConversationRow.Ask(ConversationRowBuilder.askKey(waiting.id), waiting, phase)
         }
+        if (grouped) {
+            // What follows the work (a person's sends) ends none of it: their rows come after.
+            val sections = ToolSections.group(rows, working, sectionsEnded, apart) { row -> messages[row.key.substringBeforeLast(':')]?.createdAt?.takeIf { it > 0 } }
+            rows.clear()
+            // A question answered before this showed it is one line; one that settled here stays the card it was.
+            sections.mapTo(rows) { if (it is ConversationRow.Ask && it.phase == AskPhase.Answered && it.question.id !in answered) it.copy(line = true) else it }
+        }
         for (id in pending) messages[id]?.let { rows += sentAt(builder.rows(it, agentId, parentAgentId, false)) }
         for (send in outgoing) {
             val delivery = send.failure?.let(Delivery::Failed) ?: if (send.accepted) Delivery.Pending else Delivery.Sending
             val time = shownAt.getOrPut(send.id) { send.sentAt }
             val text = shown(send)
-            rows += ConversationRow.User("${send.id}:user", send.id, text, com.slopus.happy.chat.markdown.parseMarkdown(text, hasSettingsPage), send.images + send.thumbnails, delivery, time, suggested = send.quickReply != null)
+            rows += ConversationRow.User("${send.id}:user", send.id, text, com.slopus.happy.chat.markdown.parseMarkdown(text, hasSettingsPage), send.images + send.thumbnails, delivery, time)
         }
         if (opened.isNotEmpty()) rows.replaceAll { if (it is ConversationRow.User && it.key in opened) it.copy(opened = true) else it }
-        if (rows.any { it is ConversationRow.Replies }) {
-            QuickReplyRows.mark(rows, history(), outgoing.mapNotNull { it.quickReply }, unsent = outgoing.isNotEmpty())
-        }
-        if (rows.any { it is ConversationRow.Ui }) workOn(rows)
         builder.forget(messages.keys)
         val produced = running &&
             runs.firstOrNull { it.first == lastRun }?.second.orEmpty().any { id -> messages[id]?.let { it.role == "agent" && it.content.isNotEmpty() } == true }

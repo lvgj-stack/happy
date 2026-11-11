@@ -6,7 +6,8 @@ import com.slopus.happy.connection.agentTransport
 import com.slopus.happy.connection.Transport
 import com.slopus.happy.connection.AgentIdentity
 import com.slopus.happy.connection.AgentConnectionException
-import com.slopus.happy.connection.returns
+import com.slopus.happy.connection.NetworkChange
+import com.slopus.happy.connection.changes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
@@ -38,8 +40,8 @@ class AgentSessions(
     /** The open agent connection's id ([com.slopus.happy.AppGraph.openAgentId]). */
     private val openId: StateFlow<String?>,
     private val foreground: StateFlow<Boolean>,
-    /** Whether the phone has a way out at all ([com.slopus.happy.connection.networkPath]). */
-    private val network: Flow<Boolean> = flowOf(true),
+    /** The phone's default network ([com.slopus.happy.connection.defaultNetwork]). */
+    private val network: Flow<Long?> = flowOf(0L),
     private val identityRefreshMillis: Long = 60_000,
     /** Desktop's completion chime, for a conversation that finished while its connection is open ([CompletionWatch]). */
     private val chime: () -> Unit = {},
@@ -50,17 +52,26 @@ class AgentSessions(
      * they are made again on the next open.
      */
     private val stagedFiles: File? = null,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** Appearance's Group tool calls, which every connection's chats follow. */
+    private val toolCallsGrouped: StateFlow<Boolean> = MutableStateFlow(false),
     private val makeTransport: (AgentConnectionCredentials) -> Transport = { agentTransport(it.address, it.port, it.publicUrl, it.tailcatAvailable != false) },
 ) {
     private val sessions = HashMap<String, AgentSession>()
+    @Volatile private var openChat: Pair<String, String>? = null
+
+    fun setOpenChat(connectionId: String?, agentId: String?) {
+        openChat = if (connectionId != null && agentId != null) connectionId to agentId else null
+        if (connectionId != null && agentId != null) synchronized(sessions) { sessions[connectionId] }?.hintOpenChat(agentId)
+    }
 
     init {
-        // Discovery belongs to every paired account, not only the open
-        // session. These identity-only jobs never open a catalog or SSE and
+        // Discovery covers the other paired accounts; the open session uses
+        // its bootstrap identity. These jobs never open a catalog or SSE and
         // their transient failures cannot cancel the selected session.
         scope.launch {
-            combine(connections.accounts, foreground) { accounts, front ->
-                if (front) accounts.filterNot { it.revoked }.map { it.id }.toSet() else emptySet()
+            combine(connections.accounts, foreground, openId) { accounts, front, open ->
+                if (front) accounts.filterNot { it.revoked || it.id == open }.map { it.id }.toSet() else emptySet()
             }.distinctUntilChanged().collectLatest { ids ->
                 coroutineScope {
                     ids.forEach { id -> launch { refreshIdentity(id) } }
@@ -68,8 +79,16 @@ class AgentSessions(
             }
         }
         scope.launch {
-            // Back from airplane mode: a link waiting out its backoff tries now (iOS's Session `networkWatch`).
-            network.returns().collect { synchronized(sessions) { sessions.values.toList() }.forEach { it.networkReturned() } }
+            // Back from airplane mode: a link waiting out its backoff tries now; off Wi-Fi onto
+            // cellular: a live stream is opened again (iOS's Session `networkWatch`).
+            network.changes().collect { change ->
+                synchronized(sessions) { sessions.values.toList() }.forEach {
+                    when (change) {
+                        NetworkChange.Returned -> it.networkReturned()
+                        NetworkChange.Moved -> it.networkMoved()
+                    }
+                }
+            }
         }
         scope.launch {
             var known: Set<String>? = null
@@ -160,6 +179,10 @@ class AgentSessions(
                     parent = scope,
                     makeTransport = makeTransport,
                     chime = chime,
+                    openChat = { openChat?.takeIf { it.first == connectionId }?.second },
+                    clock = clock,
+                    initiallyActive = openId.value == connectionId && foreground.value && connections.accounts.value.none { it.id == connectionId && it.signInRequired },
+                    toolCallsGrouped = toolCallsGrouped,
                 )
             }
         }
