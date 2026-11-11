@@ -462,7 +462,7 @@ export function handleToolCallUpdate(
   } else if (status === 'completed') {
     completeToolCall(toolCallId, toolKind, update.content ?? update.rawOutput, ctx);
   } else if (status === 'failed' || status === 'cancelled') {
-    failToolCall(toolCallId, status, toolKind, update.content, ctx);
+    failToolCall(toolCallId, status, toolKind, update.content ?? update.rawOutput, ctx);
   }
 
   return { handled: true, toolCallCountSincePrompt };

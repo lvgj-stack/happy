@@ -101,17 +101,20 @@ class ComposerModesTest {
         val modes = ModeOptions.availablePermissionModes("opencode", metadata, translate)
         assertEquals(listOf("Plan", "Build", "Default"), modes.map { it.name })
         assertEquals("Workspace", ModeOptions.permissionModeShortLabel(ModeOption("w", "Workspace write")))
+        assertEquals("Agent", ModeOptions.permissionModeShortLabel(ModeOption("agent", "Agent")))
+        assertEquals("Yolo", ModeOptions.permissionModeShortLabel(ModeOption("yolo", "Agent (auto-approve)")))
         assertNull(ModeOptions.permissionModeShortLabel(null))
 
         val cursor = plain("cursor") {
             put("operatingModes", Json.parseToJsonElement("""[{"code":"agent","value":"Agent"},{"code":"plan","value":"Plan"},{"code":"ask","value":"Ask"},{"code":"yolo","value":"Agent (auto-approve)"}]"""))
-            put("currentOperatingModeCode", "agent")
+            put("currentOperatingModeCode", "yolo")
             put("models", Json.parseToJsonElement("""[{"code":"composer-2.5","value":"Composer 2.5"},{"code":"claude-opus-5-5[context=300k,effort=medium,fast=false]","value":"Claude Opus 5.5"}]"""))
             put("currentModelCode", "claude-opus-5-5[context=300k,effort=medium,fast=false]")
         }
         val resolvedCursor = ComposerModeResolver.resolve(cursor, ComposerMirror(), null, translate)
         assertEquals(listOf("plan", "agent", "ask", "yolo"), resolvedCursor.availableModes.map { it.key })
-        assertEquals("agent", resolvedCursor.permissionMode?.key)
+        assertEquals("yolo", resolvedCursor.permissionMode?.key)
+        assertEquals("Yolo", ModeOptions.permissionModeShortLabel(resolvedCursor.permissionMode))
         assertEquals(listOf("composer-2.5", "claude-opus-5-5[context=300k,effort=medium,fast=false]"), resolvedCursor.availableModels.map { it.key })
         assertEquals("claude-opus-5-5[context=300k,effort=medium,fast=false]", resolvedCursor.modelMode?.key)
         assertEquals(emptyList<ModeOption>(), resolvedCursor.availableEffortLevels)

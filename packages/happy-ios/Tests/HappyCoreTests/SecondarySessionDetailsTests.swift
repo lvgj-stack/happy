@@ -335,9 +335,9 @@ final class MachineDetailsModelTests: XCTestCase {
 
     func testCLIAvailability() {
         let model = MachineDetailsModel(machine: machine(metadata: ["cliAvailability": .object([
-            "claude": .bool(true), "codex": .bool(false), "gemini": .bool(false), "openclaw": .bool(true), "detectedAt": .number(9),
+            "claude": .bool(true), "codex": .bool(false), "gemini": .bool(false), "openclaw": .bool(true), "agy": .bool(true), "cursor": .bool(true), "detectedAt": .number(9),
         ])]), sessions: [])
-        XCTAssertEqual(model.cliAvailability, .init(claude: true, codex: false, gemini: false, openclaw: true, rig: nil, detectedAt: 9))
+        XCTAssertEqual(model.cliAvailability, .init(claude: true, codex: false, gemini: false, openclaw: true, agy: true, cursor: true, rig: nil, detectedAt: 9))
     }
 
     func testRecentSessionsNewestUpdateFirstWithoutSideChats() {

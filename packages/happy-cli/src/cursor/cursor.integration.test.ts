@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findCursorBin, isLikelyCursorAuthError } from './constants';
@@ -33,14 +33,20 @@ const probe = isCursorAcpReady();
 
 describe.skipIf(!probe.ready)('Cursor ACP integration', () => {
   let backend: AcpBackend | null = null;
+  let tempCwd: string | null = null;
 
   afterEach(async () => {
     await backend?.dispose();
     backend = null;
+    if (tempCwd) {
+      rmSync(tempCwd, { recursive: true, force: true });
+      tempCwd = null;
+    }
   });
 
   it('initializes ACP session, reports modes/models, and supports session/load without replaying history', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'happy-cursor-integ-'));
+    tempCwd = cwd;
     const messages: AgentMessage[] = [];
 
     backend = new AcpBackend({

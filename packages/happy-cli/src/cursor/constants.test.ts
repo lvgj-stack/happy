@@ -86,10 +86,11 @@ describe('findCursorBin / resolveCursorBin', () => {
 });
 
 describe('isLikelyCursorAuthError', () => {
-  it('matches common Cursor ACP authentication error strings', () => {
+  it('matches common Cursor ACP authentication error strings without matching generic -32000 errors', () => {
     expect(isLikelyCursorAuthError('Authentication required (cursor_login)')).toBe(true);
     expect(isLikelyCursorAuthError('Exit code: 1: Not logged in. Please run cursor-agent login')).toBe(true);
     expect(isLikelyCursorAuthError('{"code":-32000,"message":"Auth required"}')).toBe(true);
+    expect(isLikelyCursorAuthError('{"code":-32000,"message":"Rate limit exceeded"}')).toBe(false);
     expect(isLikelyCursorAuthError('spawn cursor-agent ENOENT')).toBe(false);
     expect(isLikelyCursorAuthError(undefined)).toBe(false);
   });

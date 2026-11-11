@@ -235,6 +235,8 @@ public struct MachineDetailsModel: Equatable, Sendable {
         public var codex: Bool
         public var gemini: Bool
         public var openclaw: Bool
+        public var agy: Bool?
+        public var cursor: Bool?
         /// Only daemons that know Happy Agent report it.
         public var rig: Bool?
         public var detectedAt: Int64
@@ -276,12 +278,16 @@ public struct MachineDetailsModel: Equatable, Sendable {
         daemonStateVersion = machine.daemonStateVersion
 
         if let cli = metadata?["cliAvailability"], case .object = cli {
+            let agy = cli["agy"]
+            let cursor = cli["cursor"]
             let rig = cli["rig"]
             cliAvailability = CLIAvailability(
                 claude: SessionInfoModel.truthy(cli["claude"]),
                 codex: SessionInfoModel.truthy(cli["codex"]),
                 gemini: SessionInfoModel.truthy(cli["gemini"]),
                 openclaw: SessionInfoModel.truthy(cli["openclaw"]),
+                agy: agy == nil ? nil : SessionInfoModel.truthy(agy),
+                cursor: cursor == nil ? nil : SessionInfoModel.truthy(cursor),
                 rig: rig == nil ? nil : SessionInfoModel.truthy(rig),
                 detectedAt: Int64(cli["detectedAt"]?.numberValue ?? 0)
             )

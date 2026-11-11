@@ -185,6 +185,8 @@ final class MachineViewController: UIViewController {
             return row
         }
         var rows = [row("Claude", cli.claude), row("Codex", cli.codex), row("Gemini", cli.gemini), row("OpenClaw", cli.openclaw)]
+        if let agy = cli.agy { rows.append(row("Antigravity", agy)) }
+        if let cursor = cli.cursor { rows.append(row("Cursor", cursor)) }
         if let rig = cli.rig { rows.append(row("Rig", rig)) }
         let detected = ItemRowView(title: S.lastDetected, subtitle: SessionDetails.localeDateTime(cli.detectedAt))
         detected.showsChevron = false

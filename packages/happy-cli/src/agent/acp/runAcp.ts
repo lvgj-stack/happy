@@ -524,6 +524,9 @@ export async function runAcp(opts: {
     startedBy: opts.startedBy,
     sandbox: settings.sandboxConfig,
   });
+  if (sessionFlavor === 'cursor' && opts.resumeAgentSessionId) {
+    metadata.cursorSessionId = opts.resumeAgentSessionId;
+  }
 
   // Support in-place session reconnection via HAPPY_RECONNECT_* env vars (daemon/CLI resume)
   const reconnectSessionId = process.env.HAPPY_RECONNECT_SESSION_ID;
@@ -1068,6 +1071,19 @@ export async function runAcp(opts: {
         ...currentMetadata,
         cursorSessionId: acpSessionId!,
       }));
+      if (response) {
+        try {
+          await notifyDaemonSessionStarted(response.id, metadata, {
+            encryptionKey: encodeBase64(response.encryptionKey),
+            encryptionVariant: response.encryptionVariant,
+            seq: response.seq,
+            metadataVersion: response.metadataVersion,
+            agentStateVersion: response.agentStateVersion,
+          });
+        } catch (error) {
+          logger.debug('[acp] Failed to update daemon session metadata with cursorSessionId:', error);
+        }
+      }
     }
     if (typeof opts.permissionMode === 'string' && opts.permissionMode.length > 0) {
       await switchPermissionModeIfRequested(opts.permissionMode);

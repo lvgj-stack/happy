@@ -970,6 +970,11 @@ describe('runAcp', () => {
         type: 'message',
         message: expect.stringContaining('Session not found on disk'),
       });
+      expect(mocks.mockNotifyDaemonSessionStarted).toHaveBeenCalledWith(
+        'existing-happy-sess-1',
+        expect.objectContaining({ cursorSessionId: 'acp-session-1' }),
+        expect.any(Object),
+      );
 
       await mocks.getKillHandler()!();
       await runPromise;

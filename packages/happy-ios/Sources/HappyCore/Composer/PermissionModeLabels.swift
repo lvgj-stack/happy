@@ -29,11 +29,14 @@ public enum PermissionModeLabels {
     }
 
     /// `getPermissionModeShortLabel`: the chip's one word, nil for no mode
-    /// or a blank name.
+    /// or a blank name. Synthesized Cursor `yolo` ("Agent (auto-approve)")
+    /// reads as "Yolo" so it stays distinct from "Agent".
     public static func shortLabel(_ mode: ModeOption?) -> String? {
         guard let mode else { return nil }
         let word = firstWord(mode.name)
-        return word.isEmpty ? nil : word
+        guard !word.isEmpty else { return nil }
+        if mode.key == "yolo", word.lowercased() == "agent" { return "Yolo" }
+        return word
     }
 
     /// `getPermissionModeMenuLabel`: a menu row is the mode's name alone.

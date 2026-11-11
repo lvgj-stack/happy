@@ -330,7 +330,7 @@ final class ModelModeOptionsTests: XCTestCase {
         let metadata = json("""
         {
           "flavor": "cursor",
-          "currentOperatingModeCode": "agent",
+          "currentOperatingModeCode": "yolo",
           "operatingModes": [
             { "code": "agent", "value": "Agent" },
             { "code": "plan", "value": "Plan" },
@@ -346,7 +346,8 @@ final class ModelModeOptionsTests: XCTestCase {
         """)
         let modes = ComposerModes(metadata: metadata, picks: ComposerPicks(), agentDefaultOverrides: [:])
         XCTAssertEqual(modes.availableModes.map(\.key), ["plan", "agent", "ask", "yolo"])
-        XCTAssertEqual(modes.permissionMode?.key, "agent")
+        XCTAssertEqual(modes.permissionMode?.key, "yolo")
+        XCTAssertEqual(PermissionModeLabels.shortLabel(modes.permissionMode), "Yolo")
         XCTAssertEqual(modes.availableModels.map(\.key), [
             "composer-2.5",
             "claude-opus-5-5[context=300k,effort=medium,fast=false]",
@@ -563,6 +564,8 @@ final class PermissionModeLabelTests: XCTestCase {
         XCTAssertEqual(PermissionModeLabels.shortLabel(mode("a", "Read only")), "Read")
         XCTAssertEqual(PermissionModeLabels.shortLabel(mode("a", "Full access")), "Full")
         XCTAssertEqual(PermissionModeLabels.shortLabel(mode("a", "Auto")), "Auto")
+        XCTAssertEqual(PermissionModeLabels.shortLabel(mode("agent", "Agent")), "Agent")
+        XCTAssertEqual(PermissionModeLabels.shortLabel(mode("yolo", "Agent (auto-approve)")), "Yolo")
     }
 
     func testNoLabelWithoutAMode() {

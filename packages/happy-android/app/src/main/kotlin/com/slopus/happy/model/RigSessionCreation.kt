@@ -129,8 +129,11 @@ private const val UNRANKED = 90
 
 private fun firstWord(name: String): String = name.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
 
-/** permissionModeLabels.ts `getPermissionModeShortLabel`: the chip's one word. */
-fun permissionModeShortLabel(name: String?): String? = name?.let(::firstWord)?.ifEmpty { null }
+/** permissionModeLabels.ts `getPermissionModeShortLabel`: the chip's one word ("Yolo" for Cursor's "Agent (auto-approve)"). */
+fun permissionModeShortLabel(name: String?, key: String? = null): String? {
+    val word = name?.let(::firstWord)?.ifEmpty { null } ?: return null
+    return if (key == "yolo" && word.equals("agent", ignoreCase = true)) "Yolo" else word
+}
 
 /** permissionModeLabels.ts `sortPermissionModes`: by rank, unknown words keeping the harness's order. */
 fun sortPermissionModes(modes: List<RigModeOption>): List<RigModeOption> =

@@ -55,7 +55,7 @@ export function isLikelyCursorAuthError(detail: string | null | undefined): bool
   if (!detail) {
     return false;
   }
-  return /cursor_login|auth(?:entication)?\s*required|not\s+logged\s+in|unauthenticated|unauthorized|please\s+log\s*in|cursor-agent\s+login|-32000/i.test(
+  return /cursor_login|auth(?:entication)?\s*required|not\s+logged\s+in|unauthenticated|unauthorized|please\s+log\s*in|cursor-agent\s+login/i.test(
     detail,
   );
 }

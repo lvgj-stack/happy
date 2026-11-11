@@ -194,7 +194,7 @@ data class NewSessionOptions(
     val agentMachineOffline: Boolean get() = resolveAgentMachine(choice, resolvedAgent)?.isOnline == false
 
     /** The permission chip's one word. */
-    val permissionLabel: String? get() = permissionModeShortLabel(permission?.name)
+    val permissionLabel: String? get() = permissionModeShortLabel(permission?.name, permission?.key)
 
     /** The model chip: the model, else the harness. */
     val modelChip: String get() = (model?.name ?: agent.name).trim()

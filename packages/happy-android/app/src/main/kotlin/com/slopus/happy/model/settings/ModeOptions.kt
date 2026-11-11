@@ -251,7 +251,7 @@ object ModeOptions {
     private fun firstWord(name: String): String = name.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
 
     /** getPermissionModeShortLabel: the one word on the composer chip (Home's, by name). */
-    fun permissionModeShortLabel(mode: ModeOption?): String? = com.slopus.happy.model.permissionModeShortLabel(mode?.name)
+    fun permissionModeShortLabel(mode: ModeOption?): String? = com.slopus.happy.model.permissionModeShortLabel(mode?.name, mode?.key)
 
     /** getPermissionModeRank */
     fun permissionModeRank(mode: ModeOption): Int = permissionRanks[firstWord(mode.name).lowercase()] ?: UNRANKED

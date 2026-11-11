@@ -1,6 +1,6 @@
 # Cursor agent backend（`happy cursor`）
 
-Status: **SPEC — 待实现**（2026-11-11）
+Status: **IMPLEMENTED**（2026-11-11）
 
 目标：在 Happy 里像用 Claude Code / Codex 一样用 Cursor CLI——终端 `happy cursor`
 启动、手机端新建会话可选 Cursor、手机审批工具调用、切换模型和模式、断线后恢复会话。
