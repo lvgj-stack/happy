@@ -576,7 +576,11 @@ export class CodexAppServerClient {
                 });
             }
 
-            if (item.phase === 'final_answer' && this.pendingTurnCompletion) {
+            // Preserve child output, but only the primary thread's final
+            // answer can act as a fallback for its missing turn completion.
+            const threadId = stringOrNull(params?.threadId) ?? stringOrNull(params?.conversationId);
+            const primaryThread = !this._threadId || !threadId || threadId === this._threadId;
+            if (item.phase === 'final_answer' && this.pendingTurnCompletion && primaryThread) {
                 this.emitRawTurnCompletion(
                     this.extractTurnId(params),
                     'completed',
@@ -1509,8 +1513,23 @@ export class CodexAppServerClient {
     }
 
     private handleNotification(method: string, params: any): void {
+        // Codex also sends lifecycle notifications for spawned threads. They
+        // must not replace our active turn, finish its wait, or toggle the
+        // main session's thinking flag. Apply this before protocol selection
+        // so the legacy completion fallback is scoped the same way as v2.
+        const legacyNotification = method === 'codex/event' || method.startsWith('codex/event/');
+        const lifecycleNotification = method === 'turn/started'
+            || method === 'turn/completed'
+            || method === 'thread/status/changed'
+            || (legacyNotification && ['task_started', 'task_complete', 'turn_aborted'].includes(params?.msg?.type));
+        const threadId = stringOrNull(params?.threadId) ?? stringOrNull(params?.conversationId);
+        if (lifecycleNotification && this._threadId && threadId && threadId !== this._threadId) {
+            logger.debug(`[CodexAppServer] Ignoring ${method} for thread ${threadId}; active thread is ${this._threadId}`);
+            return;
+        }
+
         // codex/event notifications: either `codex/event` or `codex/event/<type>`
-        if (method === 'codex/event' || method.startsWith('codex/event/')) {
+        if (legacyNotification) {
             this.notificationProtocol = 'legacy';
             const msg = params?.msg;
             if (msg) {
