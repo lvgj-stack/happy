@@ -888,21 +888,12 @@ export class AcpBackend implements AgentBackend {
       }
 
       // Create or resume a session
-      const mcpServers = this.options.mcpServers
-        ? Object.entries(this.options.mcpServers).map(([name, config]) => ({
-            name,
-            command: config.command,
-            args: config.args || [],
-            env: config.env
-              ? Object.entries(config.env).map(([envName, envValue]) => ({ name: envName, value: envValue }))
-              : [],
-          }))
-        : [];
+      const mcpServers = this.buildMcpServersPayload();
 
       const createFreshSession = async (): Promise<void> => {
         const newSessionRequest: NewSessionRequest = {
           cwd: this.options.cwd,
-          mcpServers: mcpServers as unknown as NewSessionRequest['mcpServers'],
+          mcpServers,
         };
 
         logger.debug(`[AcpBackend] Creating new session...`);
@@ -1047,6 +1038,98 @@ export class AcpBackend implements AgentBackend {
       }
       throw error;
     }
+  }
+
+  private buildMcpServersPayload(): NewSessionRequest['mcpServers'] {
+    const mcpServers = this.options.mcpServers
+      ? Object.entries(this.options.mcpServers).map(([name, config]) => ({
+          name,
+          command: config.command,
+          args: config.args || [],
+          env: config.env
+            ? Object.entries(config.env).map(([envName, envValue]) => ({ name: envName, value: envValue }))
+            : [],
+        }))
+      : [];
+    return mcpServers as unknown as NewSessionRequest['mcpServers'];
+  }
+
+  /**
+   * Create a fresh ACP session on the existing connection (used by `/clear` to reset
+   * agent context without respawning the underlying ACP process).
+   */
+  async resetSession(): Promise<StartSessionResult> {
+    if (this.disposed) {
+      throw new Error('Backend has been disposed');
+    }
+    if (!this.connection) {
+      throw new Error('Session not started');
+    }
+
+    if (this.idleTimeout) {
+      clearTimeout(this.idleTimeout);
+      this.idleTimeout = null;
+    }
+    for (const timeout of this.toolCallTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.toolCallTimeouts.clear();
+    this.activeToolCalls.clear();
+    this.toolCallStartTimes.clear();
+    this.toolCallIdToNameMap.clear();
+    this.toolCallCountSincePrompt = 0;
+    this.recentPromptHadChangeTitle = false;
+
+    const initTimeout = this.transport.getInitTimeout();
+    const newSessionRequest: NewSessionRequest = {
+      cwd: this.options.cwd,
+      mcpServers: this.buildMcpServersPayload(),
+    };
+
+    logger.debug('[AcpBackend] Resetting ACP session via session/new...');
+    const sessionResponse = await withRetry(
+      async () => {
+        let timeoutHandle: NodeJS.Timeout | null = null;
+        try {
+          const result = await Promise.race([
+            this.connection!.newSession(newSessionRequest).then((res) => {
+              if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+                timeoutHandle = null;
+              }
+              return res;
+            }),
+            new Promise<never>((_, reject) => {
+              timeoutHandle = setTimeout(() => {
+                reject(new Error(`New session timeout after ${initTimeout}ms - ${this.transport.agentName} did not respond`));
+              }, initTimeout);
+            }),
+          ]);
+          return result;
+        } finally {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+        }
+      },
+      {
+        operationName: 'ResetSession',
+        maxAttempts: RETRY_CONFIG.maxAttempts,
+        baseDelayMs: RETRY_CONFIG.baseDelayMs,
+        maxDelayMs: RETRY_CONFIG.maxDelayMs,
+      },
+    );
+
+    this.acpSessionId = sessionResponse.sessionId;
+    logger.debug(`[AcpBackend] Session reset to new sessionId: ${this.acpSessionId}`);
+    if (this.options.verbose) {
+      logAcpBackendMuted(
+        `Incoming newSession response from ${this.options.agentName}: ${summarizeSessionMetadataPayload(sessionResponse)}`,
+      );
+    }
+    this.emitInitialSessionMetadata(sessionResponse);
+    this.emitIdleStatus();
+    return { sessionId: this.acpSessionId };
   }
 
   /**

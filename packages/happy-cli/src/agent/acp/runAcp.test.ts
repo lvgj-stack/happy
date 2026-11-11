@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => {
     sendPromptError: null as Error | null,
     sendPromptImpl: null as null | ((emit: (message: any) => void) => Promise<void>),
     startSessionCalls: 0,
+    resetSessionCalls: 0,
     cancelCalls: [] as string[],
     disposeCalls: 0,
     constructorArgs: null as any,
@@ -149,6 +150,16 @@ vi.mock('./AcpBackend', async (importOriginal) => {
       return { sessionId: 'acp-session-1' };
     }
 
+    async resetSession() {
+      mocks.backendState.resetSessionCalls += 1;
+      for (const message of mocks.backendState.startSessionMessages) {
+        for (const listener of mocks.backendState.listeners) {
+          listener(message);
+        }
+      }
+      return { sessionId: `acp-session-reset-${mocks.backendState.resetSessionCalls}` };
+    }
+
     async sendPrompt(sessionId: string, prompt: string) {
       mocks.backendState.prompts.push({ sessionId, prompt });
       if (mocks.backendState.sendPromptError) {
@@ -224,6 +235,7 @@ describe('runAcp', () => {
     mocks.backendState.sendPromptError = null;
     mocks.backendState.sendPromptImpl = null;
     mocks.backendState.startSessionCalls = 0;
+    mocks.backendState.resetSessionCalls = 0;
     mocks.backendState.cancelCalls = [];
     mocks.backendState.disposeCalls = 0;
     mocks.backendState.constructorArgs = null;
@@ -1106,5 +1118,109 @@ describe('runAcp', () => {
     expect(consoleLines()).not.toContain(
       'Outgoing message: "\\n\\nError: RetriableError: WritableIterable is closed"',
     );
+  });
+
+  it('handles /clear by resetting the ACP session, updating cursorSessionId, re-applying mode/model, and emitting Context was reset', async () => {
+    mocks.backendState.startSessionMessages = [
+      {
+        type: 'event',
+        name: 'config_options_update',
+        payload: {
+          configOptions: [
+            {
+              type: 'select',
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              currentValue: 'agent',
+              options: [
+                { value: 'agent', name: 'Agent' },
+                { value: 'plan', name: 'Plan' },
+              ],
+            },
+            {
+              type: 'select',
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'composer-2.5',
+              options: [
+                { value: 'composer-2.5', name: 'Composer 2.5' },
+                { value: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+              ],
+            },
+          ],
+        },
+      },
+    ];
+
+    let currentMetadata: Record<string, unknown> = {
+      path: '/repo',
+      host: 'host',
+      homeDir: '/home/user',
+      happyHomeDir: '/home/user/.happy',
+      happyLibDir: '/repo/.happy/lib',
+      happyToolsDir: '/repo/.happy/tools',
+      flavor: 'cursor',
+    };
+    mocks.mockSession.updateMetadata.mockImplementation((updater: (m: any) => any) => {
+      currentMetadata = updater(currentMetadata);
+    });
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+      permissionMode: 'plan',
+      model: 'claude-sonnet-4',
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    expect(currentMetadata.cursorSessionId).toBe('acp-session-1');
+    mocks.backendState.setConfigOptionCalls = [];
+    mocks.mockSession.sendSessionEvent.mockClear();
+
+    // Send /clear
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: '  /clear  ' },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.resetSessionCalls).toBe(1);
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+    });
+
+    // /clear must not be sent as a prompt to the model
+    expect(mocks.backendState.prompts).toEqual([]);
+    expect(currentMetadata.cursorSessionId).toBe('acp-session-reset-1');
+    expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({
+      type: 'message',
+      message: 'Context was reset',
+    });
+    // Mode and model are re-applied onto the fresh ACP session
+    expect(mocks.backendState.setConfigOptionCalls).toEqual([
+      { configId: 'mode', value: 'plan' },
+      { configId: 'model', value: 'claude-sonnet-4' },
+    ]);
+
+    // Subsequent prompt uses the new sessionId
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Hello after clear' },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toEqual([
+        { sessionId: 'acp-session-reset-1', prompt: 'Hello after clear' },
+      ]);
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
   });
 });

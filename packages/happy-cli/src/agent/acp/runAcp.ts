@@ -23,6 +23,7 @@ import { projectPath } from '@/projectPath';
 import { BasePermissionHandler, type PermissionResult } from '@/utils/BasePermissionHandler';
 import { connectionState } from '@/utils/serverConnectionErrors';
 import { isCursorSpuriousStreamCloseChunk, isLikelyCursorAuthError } from '@/cursor/constants';
+import { parseSpecialCommand } from '@/parsers/specialCommands';
 import {
   extractConfigOptionsFromPayload,
   extractCurrentModeIdFromPayload,
@@ -1066,6 +1067,15 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
 
+    if (parseSpecialCommand(message.content.text).type === 'clear') {
+      logger.debug(`[${opts.agentName}] /clear command pushed to isolated queue`);
+      messageQueue.pushIsolateAndClear(message.content.text, {
+        permissionMode: currentPermissionMode,
+        model: currentModel,
+      });
+      return;
+    }
+
     messageQueue.push(message.content.text, {
       permissionMode: currentPermissionMode,
       model: currentModel,
@@ -1099,29 +1109,34 @@ export async function runAcp(opts: {
     await handleAbort();
   });
 
+  const syncCursorSessionId = async (nextSessionId: string | null): Promise<void> => {
+    if (sessionFlavor !== 'cursor' || !nextSessionId) {
+      return;
+    }
+    metadata.cursorSessionId = nextSessionId;
+    session.updateMetadata((currentMetadata) => ({
+      ...currentMetadata,
+      cursorSessionId: nextSessionId,
+    }));
+    if (response) {
+      try {
+        await notifyDaemonSessionStarted(response.id, metadata, {
+          encryptionKey: encodeBase64(response.encryptionKey),
+          encryptionVariant: response.encryptionVariant,
+          seq: response.seq,
+          metadataVersion: response.metadataVersion,
+          agentStateVersion: response.agentStateVersion,
+        });
+      } catch (error) {
+        logger.debug('[acp] Failed to update daemon session metadata with cursorSessionId:', error);
+      }
+    }
+  };
+
   try {
     const started = await backend.startSession();
     acpSessionId = started.sessionId;
-    if (sessionFlavor === 'cursor' && acpSessionId) {
-      metadata.cursorSessionId = acpSessionId;
-      session.updateMetadata((currentMetadata) => ({
-        ...currentMetadata,
-        cursorSessionId: acpSessionId!,
-      }));
-      if (response) {
-        try {
-          await notifyDaemonSessionStarted(response.id, metadata, {
-            encryptionKey: encodeBase64(response.encryptionKey),
-            encryptionVariant: response.encryptionVariant,
-            seq: response.seq,
-            metadataVersion: response.metadataVersion,
-            agentStateVersion: response.agentStateVersion,
-          });
-        } catch (error) {
-          logger.debug('[acp] Failed to update daemon session metadata with cursorSessionId:', error);
-        }
-      }
-    }
+    await syncCursorSessionId(acpSessionId);
     if (typeof opts.permissionMode === 'string' && opts.permissionMode.length > 0) {
       await switchPermissionModeIfRequested(opts.permissionMode);
     }
@@ -1155,6 +1170,38 @@ export async function runAcp(opts: {
 
       if (!acpSessionId) {
         throw new Error('ACP session is not started');
+      }
+
+      if (parseSpecialCommand(batch.message).type === 'clear') {
+        logger.debug(`[${opts.agentName}] Handling /clear command - resetting ACP session`);
+        logAcp('incoming', 'Incoming /clear command: resetting session context');
+        permissionHandler.reset();
+        thinking = false;
+        session.keepAlive(thinking, 'remote');
+        try {
+          const reset = await backend.resetSession();
+          acpSessionId = reset.sessionId;
+          await syncCursorSessionId(acpSessionId);
+          const targetPermissionMode = batch.mode.permissionMode ?? currentPermissionMode;
+          if (typeof targetPermissionMode === 'string' && targetPermissionMode.length > 0) {
+            await switchPermissionModeIfRequested(targetPermissionMode);
+          }
+          const targetModel = batch.mode.model ?? currentModel;
+          if (typeof targetModel === 'string' && targetModel.length > 0) {
+            await switchModelIfRequested(targetModel);
+          }
+          session.sendSessionEvent({ type: 'message', message: 'Context was reset' });
+          session.sendSessionEvent({ type: 'ready' });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          session.sendSessionEvent({
+            type: 'message',
+            message: formatAcpErrorForSession(opts.agentName, detail),
+          });
+          session.sendSessionEvent({ type: 'ready' });
+          logAcp('error', `Session reset error from ${opts.agentName}: ${detail}`);
+        }
+        continue;
       }
 
       logAcp('incoming', `Incoming prompt: ${formatUnknownForConsole(batch.message, ACP_EVENT_PREVIEW_CHARS)}`);

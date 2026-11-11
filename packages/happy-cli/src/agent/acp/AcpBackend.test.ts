@@ -540,4 +540,31 @@ describe('AcpBackend resumeSessionId via session/load', () => {
       await backend.dispose();
     }
   });
+
+  it('resetSession() creates a fresh ACP session on the existing connection and switches acpSessionId', async () => {
+    const events: any[] = [];
+    const backend = new AcpBackend({
+      agentName: 'cursor',
+      cwd: process.cwd(),
+      command: process.execPath,
+      args: ['-e', makeFakeResumeAgentScript({ loadSessionCapability: true })],
+      resumeSessionId: 'cursor-prev-session-42',
+    });
+    backend.onMessage((msg) => events.push(msg));
+
+    try {
+      const started = await backend.startSession();
+      expect(started.sessionId).toBe('cursor-prev-session-42');
+
+      const reset = await backend.resetSession();
+      expect(reset.sessionId).toBe('fresh-cursor-session-99');
+
+      await backend.sendPrompt(reset.sessionId, 'Prompt on fresh session');
+      expect(events.filter((e) => e.type === 'model-output')).toEqual([
+        { type: 'model-output', textDelta: 'LIVE_TURN_FOR_fresh-cursor-session-99' },
+      ]);
+    } finally {
+      await backend.dispose();
+    }
+  });
 });
