@@ -803,6 +803,8 @@ export async function startDaemon(): Promise<void> {
             metadata = { ...metadata, claudeSessionId: fallback.metadata.claudeSessionId };
           } else if (flavor === 'codex' && !metadata.codexThreadId && fallback.metadata.codexThreadId) {
             metadata = { ...metadata, codexThreadId: fallback.metadata.codexThreadId };
+          } else if (flavor === 'cursor' && !metadata.cursorSessionId && fallback.metadata.cursorSessionId) {
+            metadata = { ...metadata, cursorSessionId: fallback.metadata.cursorSessionId };
           }
         }
 
@@ -815,7 +817,8 @@ export async function startDaemon(): Promise<void> {
         // The fetch is best effort: it reads the server's 150 most recent
         // sessions, and an older session simply keeps what the client sent.
         const needsFetch = (!metadata.claudeSessionId && (!metadata.flavor || metadata.flavor === 'claude'))
-          || (!metadata.codexThreadId && metadata.flavor === 'codex');
+          || (!metadata.codexThreadId && metadata.flavor === 'codex')
+          || (!metadata.cursorSessionId && metadata.flavor === 'cursor');
         if (needsFetch) {
           logger.debug(`[DAEMON RUN] Session ${happySessionId} has no agent session ID in the metadata at hand, fetching from server`);
           const serverMetadata = await fetchServerSessionMetadata(happySessionId, encryption.encryptionKey, encryption.encryptionVariant);

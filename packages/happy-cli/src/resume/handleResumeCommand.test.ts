@@ -167,6 +167,42 @@ describe('buildResumeLaunch', () => {
         });
     });
 
+    it('builds a Cursor resume command with optional startedBy', () => {
+        expect(buildResumeLaunch({
+            id: 'session-cursor',
+            active: false,
+            metadata: {
+                path: '/tmp/cursor-repo',
+                flavor: 'cursor',
+                cursorSessionId: 'cursor-sess-abc',
+                host: 'localhost',
+                homeDir: '/tmp',
+                happyHomeDir: '/tmp/.happy',
+                happyLibDir: '/tmp/happy',
+                happyToolsDir: '/tmp/happy/tools',
+            },
+        }, { startedBy: 'daemon', claudeStartingMode: 'remote' })).toEqual({
+            cwd: '/tmp/cursor-repo',
+            args: ['cursor', '--resume', 'cursor-sess-abc', '--started-by', 'daemon'],
+        });
+    });
+
+    it('rejects a Cursor session missing cursorSessionId', () => {
+        expect(() => buildResumeLaunch({
+            id: 'session-cursor-missing',
+            active: false,
+            metadata: {
+                path: '/tmp/cursor-repo',
+                flavor: 'cursor',
+                host: 'localhost',
+                homeDir: '/tmp',
+                happyHomeDir: '/tmp/.happy',
+                happyLibDir: '/tmp/happy',
+                happyToolsDir: '/tmp/happy/tools',
+            },
+        })).toThrow('Happy session session-cursor-missing is missing its Cursor session ID.');
+    });
+
     it('rejects unsupported flavors', () => {
         expect(() => buildResumeLaunch({
             id: 'session-3',

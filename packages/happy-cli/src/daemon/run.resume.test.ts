@@ -106,28 +106,34 @@ describe('daemon resume fallback', () => {
     );
   });
 
-  it.each(['claude', 'codex'])('refreshes a missing %s provider ID from server metadata', async (flavor) => {
+  it.each(['claude', 'codex', 'cursor'])('refreshes a missing %s provider ID from server metadata', async (flavor) => {
     await boot();
     const complete = flavor === 'codex'
       ? { path: '/project', machineId: 'machine-1', flavor, codexThreadId: 'thread-old' }
-      : metadata;
+      : flavor === 'cursor'
+        ? { path: '/project', machineId: 'machine-1', flavor, cursorSessionId: 'cursor-old' }
+        : metadata;
     mocks.get.mockResolvedValue({ data: { sessions: [{ id: 'old-session', metadata: encodeBase64(encrypt(dataKey, 'dataKey', complete)) }] } });
     expect(await mocks.handlers.resumeSession('old-session', { fallback: { ...fallback, metadata: { path: '/project', machineId: 'machine-1', flavor } } }))
       .toEqual({ type: 'success', sessionId: 'old-session' });
     expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.spawn.mock.calls[0][0]).toContain(flavor === 'codex' ? 'thread-old' : 'claude-old');
+    const expectedId = flavor === 'codex' ? 'thread-old' : (flavor === 'cursor' ? 'cursor-old' : 'claude-old');
+    expect(mocks.spawn.mock.calls[0][0]).toContain(expectedId);
   });
 
-  it.each(['claude', 'codex'])('uses a client %s ID when persisted startup metadata is stale beyond the 150-row page', async (flavor) => {
+  it.each(['claude', 'codex', 'cursor'])('uses a client %s ID when persisted startup metadata is stale beyond the 150-row page', async (flavor) => {
     const complete = flavor === 'codex'
       ? { path: '/client-stale-path', machineId: 'machine-1', flavor, codexThreadId: 'thread-old' }
-      : { ...metadata, path: '/client-stale-path' };
+      : flavor === 'cursor'
+        ? { path: '/client-stale-path', machineId: 'machine-1', flavor, cursorSessionId: 'cursor-old' }
+        : { ...metadata, path: '/client-stale-path' };
     mocks.persisted = { 'old-session': { ...fallback, metadata: { path: '/tracked-path', machineId: 'machine-1', flavor } } };
     await boot();
     expect(await mocks.handlers.resumeSession('old-session', { fallback: { ...fallback, metadata: complete } }))
       .toEqual({ type: 'success', sessionId: 'old-session' });
     expect(mocks.spawn.mock.calls[0][1].cwd).toBe('/tracked-path');
-    expect(mocks.spawn.mock.calls[0][0]).toContain(flavor === 'codex' ? 'thread-old' : 'claude-old');
+    const expectedId = flavor === 'codex' ? 'thread-old' : (flavor === 'cursor' ? 'cursor-old' : 'claude-old');
+    expect(mocks.spawn.mock.calls[0][0]).toContain(expectedId);
     expect(mocks.get).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
+import type { Session as ApiSession } from '@/api/types';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
 import { AcpBackend, isHappyChangeTitleTool, type AcpPermissionHandler } from './AcpBackend';
@@ -15,7 +16,7 @@ import { initialMachineMetadata } from '@/daemon/run';
 import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
-import { encodeBase64 } from '@/api/encryption';
+import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import { registerKillSessionHandler } from '@/claude/registerKillSessionHandler';
 import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { projectPath } from '@/projectPath';
@@ -523,7 +524,31 @@ export async function runAcp(opts: {
     startedBy: opts.startedBy,
     sandbox: settings.sandboxConfig,
   });
-  const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+
+  // Support in-place session reconnection via HAPPY_RECONNECT_* env vars (daemon/CLI resume)
+  const reconnectSessionId = process.env.HAPPY_RECONNECT_SESSION_ID;
+  const reconnectKeyBase64 = process.env.HAPPY_RECONNECT_ENCRYPTION_KEY;
+  const reconnectVariant = process.env.HAPPY_RECONNECT_ENCRYPTION_VARIANT as 'legacy' | 'dataKey' | undefined;
+  const reconnectSeq = process.env.HAPPY_RECONNECT_SEQ;
+  const reconnectMetadataVersion = process.env.HAPPY_RECONNECT_METADATA_VERSION;
+  const reconnectAgentStateVersion = process.env.HAPPY_RECONNECT_AGENT_STATE_VERSION;
+
+  let response: ApiSession | null;
+  if (reconnectSessionId && reconnectKeyBase64 && reconnectVariant) {
+    logger.debug(`[${opts.agentName}] Reconnecting to existing session ${reconnectSessionId}`);
+    response = {
+      id: reconnectSessionId,
+      seq: parseInt(reconnectSeq || '0', 10),
+      encryptionKey: decodeBase64(reconnectKeyBase64),
+      encryptionVariant: reconnectVariant,
+      metadata,
+      metadataVersion: parseInt(reconnectMetadataVersion || '0', 10),
+      agentState: state,
+      agentStateVersion: parseInt(reconnectAgentStateVersion || '0', 10),
+    };
+  } else {
+    response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+  }
   if (response) {
     logAcp('muted', `Happy Session ID: ${response.id}`);
   }
@@ -544,6 +569,17 @@ export async function runAcp(opts: {
     },
   });
   session = initialSession;
+
+  if (reconnectSessionId) {
+    session.suppressNextArchiveSignal();
+    session.skipExistingMessages();
+    session.updateMetadata((meta) => ({
+      ...meta,
+      lifecycleState: 'running',
+      archivedBy: undefined,
+      archiveReason: undefined,
+    }));
+  }
 
   if (response) {
     try {
@@ -594,6 +630,7 @@ export async function runAcp(opts: {
     permissionHandler,
     transportHandler: new DefaultTransport(opts.agentName),
     verbose,
+    resumeSessionId: opts.resumeAgentSessionId,
   });
 
   let thinking = false;
@@ -789,6 +826,18 @@ export async function runAcp(opts: {
   const onBackendMessage = (msg: AgentMessage) => {
     if (verbose) {
       logAcp('muted', `Outgoing raw backend message from ${opts.agentName}: ${formatUnknownForConsole(msg, ACP_RAW_PREVIEW_CHARS)}`);
+    }
+
+    if (msg.type === 'event' && msg.name === 'session_resume_failed') {
+      const payload = isRecord(msg.payload) ? msg.payload : {};
+      const reason = typeof payload.reason === 'string' && payload.reason.trim().length > 0
+        ? payload.reason.trim()
+        : 'session could not be loaded';
+      const displayAgent = sessionFlavor === 'cursor' ? 'Cursor' : opts.agentName;
+      session.sendSessionEvent({
+        type: 'message',
+        message: `Could not restore previous ${displayAgent} context (${reason}); started a new session instead.`,
+      });
     }
 
     if (msg.type === 'event' && msg.name === 'available_commands') {
@@ -1013,6 +1062,13 @@ export async function runAcp(opts: {
   try {
     const started = await backend.startSession();
     acpSessionId = started.sessionId;
+    if (sessionFlavor === 'cursor' && acpSessionId) {
+      metadata.cursorSessionId = acpSessionId;
+      session.updateMetadata((currentMetadata) => ({
+        ...currentMetadata,
+        cursorSessionId: acpSessionId!,
+      }));
+    }
     if (typeof opts.permissionMode === 'string' && opts.permissionMode.length > 0) {
       await switchPermissionModeIfRequested(opts.permissionMode);
     }

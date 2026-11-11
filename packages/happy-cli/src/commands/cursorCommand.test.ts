@@ -91,4 +91,16 @@ describe('handleCursorCommand', () => {
 
     await expect(handleCursorCommand([])).rejects.toThrow(/cursor-agent login/);
   });
+
+  it('forwards --resume <cursorSessionId> as resumeAgentSessionId to runAcp', async () => {
+    await handleCursorCommand(['--resume', 'cursor-acp-id-123', '--started-by', 'daemon']);
+
+    expect(mocks.mockRunAcp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'cursor',
+        startedBy: 'daemon',
+        resumeAgentSessionId: 'cursor-acp-id-123',
+      }),
+    );
+  });
 });

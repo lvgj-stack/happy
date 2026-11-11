@@ -29,6 +29,9 @@ function needsFreshMetadata(metadata: Metadata): boolean {
     if (metadata.flavor === 'codex') {
         return !metadata.codexThreadId;
     }
+    if (metadata.flavor === 'cursor') {
+        return !metadata.cursorSessionId;
+    }
     if (metadata.flavor === 'claude' || !metadata.flavor) {
         return !metadata.claudeSessionId;
     }

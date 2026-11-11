@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => {
     sendSessionEvent: vi.fn(),
     updateMetadata: vi.fn(),
     sendSessionDeath: vi.fn(),
+    suppressNextArchiveSignal: vi.fn(),
+    skipExistingMessages: vi.fn(),
     flush: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     updateAgentState: vi.fn((handler: (state: Record<string, unknown>) => Record<string, unknown>) => {
@@ -911,5 +913,68 @@ describe('runAcp', () => {
 
     await mocks.getKillHandler()!();
     await runPromise;
+  });
+
+  it('reconnects in-place via HAPPY_RECONNECT_* env vars, forwards resumeAgentSessionId, writes cursorSessionId, and announces fallback if loadSession failed', async () => {
+    vi.stubEnv('HAPPY_RECONNECT_SESSION_ID', 'existing-happy-sess-1');
+    vi.stubEnv('HAPPY_RECONNECT_ENCRYPTION_KEY', Buffer.alloc(32, 7).toString('base64'));
+    vi.stubEnv('HAPPY_RECONNECT_ENCRYPTION_VARIANT', 'dataKey');
+    vi.stubEnv('HAPPY_RECONNECT_SEQ', '15');
+    vi.stubEnv('HAPPY_RECONNECT_METADATA_VERSION', '4');
+    vi.stubEnv('HAPPY_RECONNECT_AGENT_STATE_VERSION', '6');
+
+    mocks.backendState.startSessionMessages = [
+      {
+        type: 'event',
+        name: 'session_resume_failed',
+        payload: { sessionId: 'old-cursor-sess', reason: 'Session not found on disk' },
+      },
+    ];
+
+    let currentMetadata: Record<string, unknown> = {
+      path: '/repo',
+      host: 'host',
+      homeDir: '/home/user',
+      happyHomeDir: '/home/user/.happy',
+      happyLibDir: '/repo/.happy/lib',
+      happyToolsDir: '/repo/.happy/tools',
+      flavor: 'cursor',
+      lifecycleState: 'archived',
+      archivedBy: 'cli',
+    };
+    mocks.mockSession.updateMetadata.mockImplementation((updater: (m: any) => any) => {
+      currentMetadata = updater(currentMetadata);
+    });
+
+    try {
+      const runPromise = runAcp({
+        credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+        agentName: 'cursor',
+        command: 'cursor-agent',
+        args: ['acp'],
+        resumeAgentSessionId: 'old-cursor-sess',
+      });
+
+      await vi.waitFor(() => {
+        expect(mocks.backendState.startSessionCalls).toBe(1);
+      });
+
+      expect(mocks.mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mocks.mockSession.suppressNextArchiveSignal).toHaveBeenCalledTimes(1);
+      expect(mocks.mockSession.skipExistingMessages).toHaveBeenCalledTimes(1);
+      expect(mocks.backendState.constructorArgs.resumeSessionId).toBe('old-cursor-sess');
+      expect(currentMetadata.cursorSessionId).toBe('acp-session-1');
+      expect(currentMetadata.lifecycleState).toBe('running');
+      expect(currentMetadata.archivedBy).toBeUndefined();
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({
+        type: 'message',
+        message: expect.stringContaining('Session not found on disk'),
+      });
+
+      await mocks.getKillHandler()!();
+      await runPromise;
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

@@ -40,9 +40,12 @@ export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; ses
     };
 }
 
-function resolveFlavor(metadata: Metadata): 'codex' | 'claude' | null {
+function resolveFlavor(metadata: Metadata): 'codex' | 'claude' | 'cursor' | null {
     if (metadata.flavor === 'codex' || metadata.codexThreadId) {
         return 'codex';
+    }
+    if (metadata.flavor === 'cursor' || metadata.cursorSessionId) {
+        return 'cursor';
     }
     if (metadata.flavor === 'claude' || metadata.claudeSessionId) {
         return 'claude';
@@ -59,6 +62,20 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
             throw new Error(`Happy session ${session.id} is missing its Codex thread ID.`);
         }
         const args = ['codex', '--resume', metadata.codexThreadId];
+        if (options.startedBy) {
+            args.push('--started-by', options.startedBy);
+        }
+        return {
+            cwd: metadata.path,
+            args,
+        };
+    }
+
+    if (flavor === 'cursor') {
+        if (!metadata.cursorSessionId) {
+            throw new Error(`Happy session ${session.id} is missing its Cursor session ID.`);
+        }
+        const args = ['cursor', '--resume', metadata.cursorSessionId];
         if (options.startedBy) {
             args.push('--started-by', options.startedBy);
         }

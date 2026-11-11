@@ -327,3 +327,217 @@ describe('AcpBackend requestPermission over real ACP stream', () => {
     }
   });
 });
+
+function makeFakeResumeAgentScript(opts: {
+  loadSessionCapability: boolean;
+  failLoadSession?: boolean;
+}): string {
+  return `
+    const readline = require('node:readline');
+    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+
+    function send(msg) {
+      process.stdout.write(JSON.stringify(msg) + '\\n');
+    }
+
+    rl.on('line', (line) => {
+      if (!line.trim()) return;
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: ${JSON.stringify(opts.loadSessionCapability)} },
+          },
+        });
+        return;
+      }
+      if (msg.method === 'session/load') {
+        if (${JSON.stringify(opts.failLoadSession === true)}) {
+          send({
+            jsonrpc: '2.0',
+            id: msg.id,
+            error: { code: -32004, message: 'Session not found on disk' },
+          });
+          return;
+        }
+        // Replay history notifications BEFORE returning loadSession response
+        send({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: msg.params.sessionId,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'REPLAYED_OLD_HISTORY_SHOULD_BE_DROPPED' },
+            },
+          },
+        });
+        send({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: msg.params.sessionId,
+            update: {
+              sessionUpdate: 'tool_call',
+              toolCallId: 'replay-0-0',
+              title: 'Terminal: echo old',
+              kind: 'execute',
+              rawInput: { command: 'echo old' },
+            },
+          },
+        });
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            modes: {
+              currentModeId: 'agent',
+              availableModes: [
+                { id: 'agent', name: 'Agent' },
+                { id: 'plan', name: 'Plan' },
+              ],
+            },
+            models: {
+              currentModelId: 'composer-2.5',
+              availableModels: [
+                { modelId: 'composer-2.5', name: 'Composer 2.5' },
+              ],
+            },
+          },
+        });
+        return;
+      }
+      if (msg.method === 'session/new') {
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            sessionId: 'fresh-cursor-session-99',
+            modes: {
+              currentModeId: 'agent',
+              availableModes: [{ id: 'agent', name: 'Agent' }],
+            },
+          },
+        });
+        return;
+      }
+      if (msg.method === 'session/prompt') {
+        send({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: msg.params.sessionId,
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'LIVE_TURN_FOR_' + msg.params.sessionId },
+            },
+          },
+        });
+        send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { stopReason: 'end_turn' },
+        });
+      }
+    });
+  `;
+}
+
+describe('AcpBackend resumeSessionId via session/load', () => {
+  it('calls session/load, drops replayed session/update events, emits modes/models, and sends subsequent prompts to resumed sessionId', async () => {
+    const events: any[] = [];
+    const backend = new AcpBackend({
+      agentName: 'cursor',
+      cwd: process.cwd(),
+      command: process.execPath,
+      args: ['-e', makeFakeResumeAgentScript({ loadSessionCapability: true })],
+      resumeSessionId: 'cursor-prev-session-42',
+    });
+    backend.onMessage((msg) => events.push(msg));
+
+    try {
+      const started = await backend.startSession();
+      expect(started.sessionId).toBe('cursor-prev-session-42');
+
+      // Replayed text and tool calls during loadSession must be dropped
+      expect(events.filter((e) => e.type === 'model-output')).toEqual([]);
+      expect(events.filter((e) => e.type === 'tool-call')).toEqual([]);
+
+      // Metadata from loadSession response must still be emitted
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'event', name: 'modes_update' }),
+          expect.objectContaining({ type: 'event', name: 'models_update' }),
+        ]),
+      );
+
+      // Subsequent live prompts stream normally using resumed sessionId
+      await backend.sendPrompt(started.sessionId, 'What was the secret word?');
+      expect(events.filter((e) => e.type === 'model-output')).toEqual([
+        { type: 'model-output', textDelta: 'LIVE_TURN_FOR_cursor-prev-session-42' },
+      ]);
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('falls back to session/new and emits session_resume_failed when loadSession fails', async () => {
+    const events: any[] = [];
+    const backend = new AcpBackend({
+      agentName: 'cursor',
+      cwd: process.cwd(),
+      command: process.execPath,
+      args: ['-e', makeFakeResumeAgentScript({ loadSessionCapability: true, failLoadSession: true })],
+      resumeSessionId: 'cursor-missing-session',
+    });
+    backend.onMessage((msg) => events.push(msg));
+
+    try {
+      const started = await backend.startSession();
+      expect(started.sessionId).toBe('fresh-cursor-session-99');
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'event',
+            name: 'session_resume_failed',
+            payload: expect.objectContaining({
+              sessionId: 'cursor-missing-session',
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      await backend.dispose();
+    }
+  });
+
+  it('falls back to session/new and emits session_resume_failed when agentCapabilities.loadSession is false', async () => {
+    const events: any[] = [];
+    const backend = new AcpBackend({
+      agentName: 'cursor',
+      cwd: process.cwd(),
+      command: process.execPath,
+      args: ['-e', makeFakeResumeAgentScript({ loadSessionCapability: false })],
+      resumeSessionId: 'cursor-unsupported-load',
+    });
+    backend.onMessage((msg) => events.push(msg));
+
+    try {
+      const started = await backend.startSession();
+      expect(started.sessionId).toBe('fresh-cursor-session-99');
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'event',
+            name: 'session_resume_failed',
+          }),
+        ]),
+      );
+    } finally {
+      await backend.dispose();
+    }
+  });
+});
