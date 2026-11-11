@@ -2,6 +2,9 @@ import { findCursorBin, isLikelyCursorAuthError } from '@/cursor/constants';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { ensureDaemonRunning } from '@/daemon/ensureDaemonRunning';
 import { runAcp } from '@/agent/acp';
+import { projectPath } from '@/projectPath';
+import { CURSOR_WARM_DIR_ENV } from '@/cursor/warmAcp';
+import { join } from 'node:path';
 
 const CURSOR_AUTH_HINT = 'Run `cursor-agent login` to authenticate Cursor CLI.';
 
@@ -42,12 +45,22 @@ export async function handleCursorCommand(args: string[]): Promise<void> {
   const { credentials } = await authAndSetupMachineIfNeeded();
   await ensureDaemonRunning();
 
+  // Daemon-spawned sessions may take a pre-warmed cursor-agent through the
+  // warm connector, which falls back to running cursor-agent itself.
+  const warmDir = process.platform === 'win32' ? undefined : process.env[CURSOR_WARM_DIR_ENV];
+  const launch = warmDir
+    ? {
+      command: process.execPath,
+      args: ['--no-warnings', '--no-deprecation', join(projectPath(), 'dist', 'cursor', 'warmAcpEntry.mjs'), 'connect', '--dir', warmDir, '--', command, 'acp'],
+    }
+    : { command, args: ['acp'] };
+
   try {
     await runAcp({
       credentials,
       agentName: 'cursor',
-      command,
-      args: ['acp'],
+      command: launch.command,
+      args: launch.args,
       startedBy,
       verbose,
       model,

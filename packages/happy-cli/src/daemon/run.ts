@@ -37,6 +37,7 @@ import {
 import { startHappyTerminalDaemon } from './happyTerminalBoot';
 import { appendDaemonSpawnModeArgs, shouldForwardDaemonPermissionMode } from './spawnModeArgs';
 import { hasPersistedProcessConflict, isPidAlive, machineBootTimeMs } from './sessionLiveness';
+import { startCursorSpeedups } from '@/cursor/daemonSpeedups';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -172,6 +173,8 @@ export async function startDaemon(): Promise<void> {
     // Ensure auth and machine registration BEFORE anything else
     const { credentials, machineId } = await authAndSetupMachineIfNeeded();
     logger.debug('[DAEMON RUN] Auth and machine setup complete');
+
+    const cursorSpeedups = startCursorSpeedups();
 
     // Setup state - key by PID
     const pidToTrackedSession = new Map<number, TrackedSession>();
@@ -359,6 +362,11 @@ export async function startDaemon(): Promise<void> {
         }
         if (options.isSideChat) {
           extraEnv.HAPPY_SIDE_CHAT = '1';
+        }
+        // A warm cursor-agent was started with the daemon's environment, so
+        // only sessions without their own variables or token may take one.
+        if (options.agent === 'cursor' && !options.token && Object.keys(options.environmentVariables ?? {}).length === 0) {
+          Object.assign(extraEnv, cursorSpeedups.warmEnv);
         }
         // For fork: spawned Happy CLI needs to know which Claude JSONL to
         // backfill into the fresh Happy session row. Without this, the
@@ -863,6 +871,7 @@ export async function startDaemon(): Promise<void> {
             HAPPY_RECONNECT_SEQ: String(encryption.seq),
             HAPPY_RECONNECT_METADATA_VERSION: String(encryption.metadataVersion),
             HAPPY_RECONNECT_AGENT_STATE_VERSION: String(encryption.agentStateVersion),
+            ...(flavor === 'cursor' ? cursorSpeedups.warmEnv : {}),
           }),
         });
       } catch (error) {
@@ -1159,6 +1168,7 @@ export async function startDaemon(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       apiMachine.shutdown();
+      cursorSpeedups.stop();
       await stopControlServer();
       await cleanupDaemonState();
       await stopCaffeinate();

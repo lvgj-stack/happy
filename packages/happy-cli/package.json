@@ -48,6 +48,16 @@
         "types": "./dist/codex/happyMcpStdioBridge.d.mts",
         "default": "./dist/codex/happyMcpStdioBridge.mjs"
       }
+    },
+    "./cursor/warmAcpEntry": {
+      "require": {
+        "types": "./dist/cursor/warmAcpEntry.d.cts",
+        "default": "./dist/cursor/warmAcpEntry.cjs"
+      },
+      "import": {
+        "types": "./dist/cursor/warmAcpEntry.d.mts",
+        "default": "./dist/cursor/warmAcpEntry.mjs"
+      }
     }
   },
   "files": [
