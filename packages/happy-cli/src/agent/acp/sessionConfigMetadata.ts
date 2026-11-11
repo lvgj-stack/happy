@@ -14,6 +14,12 @@ type MetadataOption = {
   description?: string | null;
 };
 
+export const CURSOR_SYNTHESIZED_YOLO_MODE: MetadataOption = {
+  code: 'yolo',
+  value: 'Agent (auto-approve)',
+  description: 'Runs tools without asking',
+};
+
 export type AcpSessionConfigSnapshot = {
   configOptions?: SessionConfigOption[] | null;
   modes?: SessionModeState | null;
@@ -216,6 +222,15 @@ export function mergeAcpSessionConfigIntoMetadata(metadata: Metadata, snapshot: 
 
   if (snapshot.currentModeId) {
     next.currentOperatingModeCode = snapshot.currentModeId;
+  }
+
+  if (next.flavor === 'cursor' && Array.isArray(next.operatingModes)) {
+    if (!next.operatingModes.some((mode) => mode.code === CURSOR_SYNTHESIZED_YOLO_MODE.code)) {
+      next.operatingModes = [
+        ...next.operatingModes,
+        { ...CURSOR_SYNTHESIZED_YOLO_MODE },
+      ];
+    }
   }
 
   return next;

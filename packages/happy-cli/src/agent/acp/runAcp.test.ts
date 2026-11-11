@@ -119,8 +119,11 @@ vi.mock('@/ui/logger', () => ({
   },
 }));
 
-vi.mock('./AcpBackend', () => ({
-  AcpBackend: class MockAcpBackend {
+vi.mock('./AcpBackend', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./AcpBackend')>();
+  return {
+    ...actual,
+    AcpBackend: class MockAcpBackend {
     constructor(args: any) {
       mocks.backendState.constructorArgs = args;
     }
@@ -182,8 +185,9 @@ vi.mock('./AcpBackend', () => ({
     async dispose() {
       mocks.backendState.disposeCalls += 1;
     }
-  },
-}));
+    },
+  };
+});
 
 import { runAcp } from './runAcp';
 
@@ -785,6 +789,125 @@ describe('runAcp', () => {
     });
 
     expect(mocks.backendState.setConfigOptionCalls).toEqual([]);
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+  });
+
+  it('supports synthesized yolo mode for cursor (including --permission-mode yolo) and restores prompting on switching back to agent', async () => {
+    mocks.backendState.startSessionMessages = [
+      {
+        type: 'event',
+        name: 'config_options_update',
+        payload: {
+          configOptions: [
+            {
+              type: 'select',
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              currentValue: 'plan',
+              options: [
+                { value: 'agent', name: 'Agent' },
+                { value: 'plan', name: 'Plan' },
+                { value: 'ask', name: 'Ask' },
+              ],
+            },
+          ],
+        },
+      },
+    ];
+
+    let currentMetadata: Record<string, unknown> = {
+      path: '/repo',
+      host: 'host',
+      homeDir: '/home/user',
+      happyHomeDir: '/home/user/.happy',
+      happyLibDir: '/repo/.happy/lib',
+      happyToolsDir: '/repo/.happy/tools',
+      flavor: 'cursor',
+    };
+    mocks.mockSession.updateMetadata.mockImplementation((updater: (m: any) => any) => {
+      currentMetadata = updater(currentMetadata);
+    });
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+      permissionMode: 'yolo',
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    // Startup --permission-mode yolo switched Cursor from 'plan' to 'agent' and published currentOperatingModeCode='yolo'
+    expect(mocks.backendState.setConfigOptionCalls).toEqual([
+      { configId: 'mode', value: 'agent' },
+    ]);
+    expect(currentMetadata.currentOperatingModeCode).toBe('yolo');
+
+    // Even if backend emits a config_options_update reporting currentValue='agent', currentOperatingModeCode stays 'yolo'
+    for (const listener of mocks.backendState.listeners) {
+      listener({
+        type: 'event',
+        name: 'config_options_update',
+        payload: {
+          configOptions: [
+            {
+              type: 'select',
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              currentValue: 'agent',
+              options: [
+                { value: 'agent', name: 'Agent' },
+                { value: 'plan', name: 'Plan' },
+                { value: 'ask', name: 'Ask' },
+              ],
+            },
+          ],
+        },
+      });
+    }
+    expect(currentMetadata.currentOperatingModeCode).toBe('yolo');
+
+    // Two consecutive shell tool calls auto-approve immediately without waiting for mobile response
+    const permHandler = mocks.backendState.constructorArgs.permissionHandler;
+    await expect(permHandler.handleToolCall('shell-1', 'execute', { command: 'ls' }))
+      .resolves.toEqual({ decision: 'approved' });
+    await expect(permHandler.handleToolCall('shell-2', 'execute', { command: 'pwd' }))
+      .resolves.toEqual({ decision: 'approved' });
+
+    // Switch back to 'agent' mode via user message
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Switch back to normal agent mode' },
+      meta: { permissionMode: 'agent' },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+    expect(currentMetadata.currentOperatingModeCode).toBe('agent');
+
+    // Now shell tool call waits for mobile permission response, while change_title still auto-approves!
+    await expect(permHandler.handleToolCall('mcp-title-1', 'change_title', { title: 'Chat title' }))
+      .resolves.toEqual({ decision: 'approved' });
+
+    let shell3Resolved = false;
+    const shell3Promise = permHandler.handleToolCall('shell-3', 'execute', { command: 'whoami' }).then((res: any) => {
+      shell3Resolved = true;
+      return res;
+    });
+    await Promise.resolve();
+    expect(shell3Resolved).toBe(false);
+
+    // Approve shell-3 through the permission RPC handler
+    const rpcPermHandler = mocks.sessionHandlers.get('permission');
+    await rpcPermHandler!({ id: 'shell-3', approved: true, decision: 'approved' });
+    await expect(shell3Promise).resolves.toEqual({ decision: 'approved' });
 
     await mocks.getKillHandler()!();
     await runPromise;

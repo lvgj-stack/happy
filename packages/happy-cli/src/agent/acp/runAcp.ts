@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
-import { AcpBackend, type AcpPermissionHandler } from './AcpBackend';
+import { AcpBackend, isHappyChangeTitleTool, type AcpPermissionHandler } from './AcpBackend';
 import { DefaultTransport } from '@/agent/transport';
 import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
@@ -407,6 +407,7 @@ function resolveRequestedLegacyModelCode(models: SessionModelState, requested: s
 
 class GenericAcpPermissionHandler extends BasePermissionHandler implements AcpPermissionHandler {
   private readonly logPrefix: string;
+  private autoApprove = false;
 
   constructor(session: ApiSessionClient, agentName: string) {
     super(session);
@@ -417,7 +418,38 @@ class GenericAcpPermissionHandler extends BasePermissionHandler implements AcpPe
     return this.logPrefix;
   }
 
+  setAutoApprove(enabled: boolean): void {
+    this.autoApprove = enabled;
+    logger.debug(`${this.logPrefix} Auto-approve mode set to: ${enabled}`);
+  }
+
+  private shouldAutoApprove(toolName: string, toolCallId: string): boolean {
+    if (this.autoApprove) {
+      return true;
+    }
+    return isHappyChangeTitleTool({ toolName, toolCallId });
+  }
+
   async handleToolCall(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
+    if (this.shouldAutoApprove(toolName, toolCallId)) {
+      logger.debug(`${this.logPrefix} Auto-approving tool: ${toolName} (${toolCallId})`);
+      this.session.updateAgentState((currentState) => ({
+        ...currentState,
+        completedRequests: {
+          ...currentState.completedRequests,
+          [toolCallId]: {
+            tool: toolName,
+            arguments: input,
+            createdAt: Date.now(),
+            completedAt: Date.now(),
+            status: 'approved',
+            decision: 'approved',
+          },
+        },
+      }));
+      return { decision: 'approved' };
+    }
+
     return new Promise<PermissionResult>((resolve, reject) => {
       this.pendingRequests.set(toolCallId, {
         resolve,
@@ -484,8 +516,9 @@ export async function runAcp(opts: {
     metadata: initialMachineMetadata,
   });
 
+  const sessionFlavor = resolveSessionFlavor(opts.agentName);
   const { state, metadata } = createSessionMetadata({
-    flavor: resolveSessionFlavor(opts.agentName),
+    flavor: sessionFlavor,
     machineId: settings.machineId,
     startedBy: opts.startedBy,
     sandbox: settings.sandboxConfig,
@@ -542,6 +575,7 @@ export async function runAcp(opts: {
   let sawSlashCommands = false;
   let sawModes = false;
   let sawModels = false;
+  let cursorYoloActive = false;
 
   const happyServer = await startHappyServer(session);
   const mcpServers = {
@@ -619,6 +653,48 @@ export async function runAcp(opts: {
       return;
     }
 
+    if (sessionFlavor === 'cursor' && normalizeComparable(requestedMode) === 'yolo') {
+      cursorYoloActive = true;
+      permissionHandler.setAutoApprove(true);
+
+      if (modeSelector) {
+        const agentCode = resolveRequestedCode(modeSelector.options, 'agent');
+        if (agentCode && agentCode !== modeSelector.currentCode) {
+          const switched = await backend.setSessionConfigOption(modeSelector.configId, agentCode);
+          if (switched) {
+            modeSelector.currentCode = agentCode;
+          }
+        }
+      } else if (legacyModes) {
+        const agentCode = resolveRequestedLegacyModeCode(legacyModes, 'agent');
+        if (agentCode && agentCode !== legacyModes.currentModeId) {
+          const switched = await backend.setSessionMode(agentCode);
+          if (switched) {
+            legacyModes = {
+              ...legacyModes,
+              currentModeId: agentCode,
+            };
+          }
+        }
+      }
+
+      session.updateMetadata((currentMetadata) =>
+        mergeAcpSessionConfigIntoMetadata(currentMetadata, { currentModeId: 'yolo' }),
+      );
+      return;
+    }
+
+    const disableCursorYolo = (nextModeCode: string) => {
+      if (!cursorYoloActive) {
+        return;
+      }
+      cursorYoloActive = false;
+      permissionHandler.setAutoApprove(false);
+      session.updateMetadata((currentMetadata) =>
+        mergeAcpSessionConfigIntoMetadata(currentMetadata, { currentModeId: nextModeCode }),
+      );
+    };
+
     if (modeSelector) {
       const resolved = resolveRequestedCode(modeSelector.options, requestedMode);
       if (!resolved) {
@@ -626,11 +702,16 @@ export async function runAcp(opts: {
         return;
       }
       if (resolved === modeSelector.currentCode) {
+        disableCursorYolo(resolved);
         return;
       }
+      disableCursorYolo(resolved);
       const switched = await backend.setSessionConfigOption(modeSelector.configId, resolved);
       if (switched) {
         modeSelector.currentCode = resolved;
+        session.updateMetadata((currentMetadata) =>
+          mergeAcpSessionConfigIntoMetadata(currentMetadata, { currentModeId: resolved }),
+        );
         return;
       }
     }
@@ -645,9 +726,11 @@ export async function runAcp(opts: {
       return;
     }
     if (resolvedLegacyMode === legacyModes.currentModeId) {
+      disableCursorYolo(resolvedLegacyMode);
       return;
     }
 
+    disableCursorYolo(resolvedLegacyMode);
     const switched = await backend.setSessionMode(resolvedLegacyMode);
     if (switched) {
       legacyModes = {
@@ -761,8 +844,15 @@ export async function runAcp(opts: {
             logAcp('muted', `Outgoing model options from ${opts.agentName}: not reported in config options`);
           }
         }
+        if (cursorYoloActive && modeSelector && modeSelector.currentCode !== 'agent') {
+          cursorYoloActive = false;
+          permissionHandler.setAutoApprove(false);
+        }
         session.updateMetadata((currentMetadata) =>
-          mergeAcpSessionConfigIntoMetadata(currentMetadata, { configOptions }),
+          mergeAcpSessionConfigIntoMetadata(currentMetadata, {
+            configOptions,
+            ...(cursorYoloActive ? { currentModeId: 'yolo' } : {}),
+          }),
         );
       }
     }
@@ -778,8 +868,15 @@ export async function runAcp(opts: {
             logAcp('muted', `  mode=${mode.id} name=${mode.name}${formatOptionalDetail(mode.description, 160)}`);
           }
         }
+        if (cursorYoloActive && modes.currentModeId !== 'agent') {
+          cursorYoloActive = false;
+          permissionHandler.setAutoApprove(false);
+        }
         session.updateMetadata((currentMetadata) =>
-          mergeAcpSessionConfigIntoMetadata(currentMetadata, { modes }),
+          mergeAcpSessionConfigIntoMetadata(currentMetadata, {
+            modes,
+            ...(cursorYoloActive ? { currentModeId: 'yolo' } : {}),
+          }),
         );
       }
     }
@@ -816,8 +913,14 @@ export async function runAcp(opts: {
             currentModeId,
           };
         }
+        if (cursorYoloActive && currentModeId !== 'agent') {
+          cursorYoloActive = false;
+          permissionHandler.setAutoApprove(false);
+        }
         session.updateMetadata((currentMetadata) =>
-          mergeAcpSessionConfigIntoMetadata(currentMetadata, { currentModeId }),
+          mergeAcpSessionConfigIntoMetadata(currentMetadata, {
+            currentModeId: cursorYoloActive ? 'yolo' : currentModeId,
+          }),
         );
       }
     }

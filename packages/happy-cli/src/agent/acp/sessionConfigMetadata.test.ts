@@ -181,4 +181,59 @@ describe('sessionConfigMetadata', () => {
     expect(extractConfigOptionsFromPayload({ configOptions: [option] })).toEqual([option]);
     expect(extractConfigOptionsFromPayload({})).toBeNull();
   });
+
+  it('appends synthesized yolo mode only when metadata.flavor is cursor without duplicating', () => {
+    const cursorMetadata: Metadata = {
+      ...createBaseMetadata(),
+      flavor: 'cursor',
+    };
+    const configOptions: SessionConfigOption[] = [
+      selectOption({
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        currentValue: 'agent',
+        options: [
+          { value: 'agent', name: 'Agent', description: 'Default agent mode' },
+          { value: 'plan', name: 'Plan', description: 'Read-only planning' },
+          { value: 'ask', name: 'Ask', description: 'Q&A' },
+        ],
+      }),
+    ];
+
+    const first = mergeAcpSessionConfigIntoMetadata(cursorMetadata, { configOptions });
+    expect(first.operatingModes).toEqual([
+      { code: 'agent', value: 'Agent', description: 'Default agent mode' },
+      { code: 'plan', value: 'Plan', description: 'Read-only planning' },
+      { code: 'ask', value: 'Ask', description: 'Q&A' },
+      { code: 'yolo', value: 'Agent (auto-approve)', description: 'Runs tools without asking' },
+    ]);
+    expect(first.currentOperatingModeCode).toBe('agent');
+
+    // Second update with legacy modes also includes yolo once, and respects currentModeId override
+    const second = mergeAcpSessionConfigIntoMetadata(first, {
+      modes: {
+        availableModes: [
+          { id: 'agent', name: 'Agent' },
+          { id: 'plan', name: 'Plan' },
+        ],
+        currentModeId: 'agent',
+      },
+      currentModeId: 'yolo',
+    });
+    expect(second.operatingModes).toEqual([
+      { code: 'agent', value: 'Agent' },
+      { code: 'plan', value: 'Plan' },
+      { code: 'yolo', value: 'Agent (auto-approve)', description: 'Runs tools without asking' },
+    ]);
+    expect(second.currentOperatingModeCode).toBe('yolo');
+
+    // Non-cursor flavors never get synthesized yolo
+    const opencodeMetadata: Metadata = {
+      ...createBaseMetadata(),
+      flavor: 'opencode',
+    };
+    const opencodeNext = mergeAcpSessionConfigIntoMetadata(opencodeMetadata, { configOptions });
+    expect(opencodeNext.operatingModes?.map((m) => m.code)).toEqual(['agent', 'plan', 'ask']);
+  });
 });

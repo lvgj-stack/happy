@@ -293,8 +293,11 @@ export function startToolCall(
   // Emit running status
   ctx.emit({ type: 'status', status: 'running' });
 
-  // Parse args and emit tool-call event
-  const args = parseArgsFromContent(update.content);
+  // Parse args from content or standard ACP rawInput
+  const contentArgs = parseArgsFromContent(update.content);
+  const args = Object.keys(contentArgs).length > 0
+    ? contentArgs
+    : parseArgsFromContent(update.rawInput);
 
   // Extract locations if present
   if (update.locations && Array.isArray(update.locations)) {
@@ -457,7 +460,7 @@ export function handleToolCallUpdate(
       logger.debug(`[AcpBackend] Tool call ${toolCallId} already tracked, status: ${status}`);
     }
   } else if (status === 'completed') {
-    completeToolCall(toolCallId, toolKind, update.content, ctx);
+    completeToolCall(toolCallId, toolKind, update.content ?? update.rawOutput, ctx);
   } else if (status === 'failed' || status === 'cancelled') {
     failToolCall(toolCallId, status, toolKind, update.content, ctx);
   }
