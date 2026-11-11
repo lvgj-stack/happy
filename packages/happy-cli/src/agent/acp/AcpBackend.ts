@@ -199,6 +199,7 @@ export function isHappyChangeTitleTool(params: {
   toolCallId?: string | null;
   title?: string | null;
   kind?: string | null;
+  input?: Record<string, unknown> | null;
 }): boolean {
   const normalizedKind = typeof params.kind === 'string' ? params.kind.trim().toLowerCase() : '';
   if (normalizedKind && NON_MCP_TOOL_KINDS.has(normalizedKind)) {
@@ -213,6 +214,19 @@ export function isHappyChangeTitleTool(params: {
   const normalizedTitle = typeof params.title === 'string' ? params.title.trim().toLowerCase() : '';
   if (normalizedTitle && HAPPY_CHANGE_TITLE_NAMES.has(normalizedTitle)) {
     return true;
+  }
+
+  if (params.input && typeof params.input === 'object' && !Array.isArray(params.input)) {
+    const providerRaw = typeof params.input.providerIdentifier === 'string'
+      ? params.input.providerIdentifier
+      : (typeof params.input.namespace === 'string' ? params.input.namespace : '');
+    const innerToolRaw = typeof params.input.toolName === 'string' ? params.input.toolName : '';
+    if (
+      providerRaw.trim().toLowerCase() === 'happy'
+      && innerToolRaw.trim().toLowerCase() === 'change_title'
+    ) {
+      return true;
+    }
   }
 
   const callId = typeof params.toolCallId === 'string' ? params.toolCallId : '';
@@ -766,6 +780,7 @@ export class AcpBackend implements AgentBackend {
             toolCallId,
             title: toolCall?.title,
             kind: rawKind,
+            input,
           })) {
             toolName = 'change_title';
           } else if ((toolName === 'other' || toolName === 'Unknown tool') && typeof toolCall?.title === 'string' && toolCall.title.trim().length > 0) {
@@ -1537,6 +1552,7 @@ export class AcpBackend implements AgentBackend {
    * Helper to emit idle status and resolve any waiting promises
    */
   private emitIdleStatus(): void {
+    this.waitingForResponse = false;
     this.emit({ type: 'status', status: 'idle' });
     // Resolve any waiting promises
     if (this.idleResolver) {

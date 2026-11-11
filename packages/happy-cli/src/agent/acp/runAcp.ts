@@ -5,6 +5,7 @@ import type { Session as ApiSession } from '@/api/types';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
 import { AcpBackend, isHappyChangeTitleTool, type AcpPermissionHandler } from './AcpBackend';
+import { buildAcpTurnPrompt } from './acpPrompt';
 import { DefaultTransport } from '@/agent/transport';
 import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
@@ -275,6 +276,7 @@ type AcpSwitchMode = {
   permissionMode?: string;
   model?: string | null;
   effort?: string | null;
+  appendSystemPrompt?: string;
 };
 
 type AcpSelectableOption = {
@@ -432,15 +434,18 @@ class GenericAcpPermissionHandler extends BasePermissionHandler implements AcpPe
     logger.debug(`${this.logPrefix} Auto-approve mode set to: ${enabled}`);
   }
 
-  private shouldAutoApprove(toolName: string, toolCallId: string): boolean {
+  private shouldAutoApprove(toolName: string, toolCallId: string, input: unknown): boolean {
     if (this.autoApprove) {
       return true;
     }
-    return isHappyChangeTitleTool({ toolName, toolCallId });
+    const inputRecord = input && typeof input === 'object' && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : undefined;
+    return isHappyChangeTitleTool({ toolName, toolCallId, input: inputRecord });
   }
 
   async handleToolCall(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
-    if (this.shouldAutoApprove(toolName, toolCallId)) {
+    if (this.shouldAutoApprove(toolName, toolCallId, input)) {
       logger.debug(`${this.logPrefix} Auto-approving tool: ${toolName} (${toolCallId})`);
       this.session.updateAgentState((currentState) => ({
         ...currentState,
@@ -621,6 +626,9 @@ export async function runAcp(opts: {
   let currentPermissionMode: string | undefined = opts.permissionMode;
   let currentModel: string | null | undefined = opts.model;
   let currentEffort: string | null | undefined;
+  let currentAppendSystemPrompt: string | undefined = undefined;
+  let firstTurn = !Boolean(opts.resumeAgentSessionId);
+  let appendSystemPromptInjected = Boolean(opts.resumeAgentSessionId);
   let modeSelector: AcpConfigSelector | null = null;
   let modelSelector: AcpConfigSelector | null = null;
   let effortSelector: AcpConfigSelector | null = null;
@@ -632,10 +640,11 @@ export async function runAcp(opts: {
   let cursorYoloActive = false;
 
   const happyServer = await startHappyServer(session);
+  const bridgeEntrypoint = join(projectPath(), 'bin', 'happy-mcp.mjs');
   const mcpServers = {
     happy: {
-      command: join(projectPath(), 'bin', 'happy-mcp.mjs'),
-      args: ['--url', happyServer.url],
+      command: process.execPath,
+      args: ['--no-warnings', '--no-deprecation', bridgeEntrypoint, '--url', happyServer.url],
     },
   };
 
@@ -647,6 +656,7 @@ export async function runAcp(opts: {
     mcpServers,
     permissionHandler,
     transportHandler: new DefaultTransport(opts.agentName),
+    hasChangeTitleInstruction: (prompt) => prompt.toLowerCase().includes('change_title'),
     verbose,
     resumeSessionId: opts.resumeAgentSessionId,
   });
@@ -909,6 +919,8 @@ export async function runAcp(opts: {
     }
 
     if (msg.type === 'event' && msg.name === 'session_resume_failed') {
+      firstTurn = !Boolean(reconnectSessionId);
+      appendSystemPromptInjected = false;
       const payload = isRecord(msg.payload) ? msg.payload : {};
       const reason = typeof payload.reason === 'string' && payload.reason.trim().length > 0
         ? payload.reason.trim()
@@ -1128,12 +1140,18 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP effort: ${currentEffort ?? 'null'}`);
     }
 
+    if (message.meta && Object.prototype.hasOwnProperty.call(message.meta, 'appendSystemPrompt')) {
+      currentAppendSystemPrompt = message.meta.appendSystemPrompt || undefined;
+      logger.debug(`[${opts.agentName}] Updated ACP appendSystemPrompt: ${currentAppendSystemPrompt ? 'set' : 'none'}`);
+    }
+
     if (parseSpecialCommand(message.content.text).type === 'clear') {
       logger.debug(`[${opts.agentName}] /clear command pushed to isolated queue`);
       messageQueue.pushIsolateAndClear(message.content.text, {
         permissionMode: currentPermissionMode,
         model: currentModel,
         effort: currentEffort,
+        appendSystemPrompt: currentAppendSystemPrompt,
       });
       return;
     }
@@ -1142,6 +1160,7 @@ export async function runAcp(opts: {
       permissionMode: currentPermissionMode,
       model: currentModel,
       effort: currentEffort,
+      appendSystemPrompt: currentAppendSystemPrompt,
     }, attachments);
   }, (error) => {
     logger.debug(`[${opts.agentName}] Failed to queue user message:`, error);
@@ -1246,6 +1265,7 @@ export async function runAcp(opts: {
         try {
           const reset = await backend.resetSession();
           acpSessionId = reset.sessionId;
+          appendSystemPromptInjected = false;
           await syncCursorSessionId(acpSessionId);
           const targetPermissionMode = batch.mode.permissionMode ?? currentPermissionMode;
           if (typeof targetPermissionMode === 'string' && targetPermissionMode.length > 0) {
@@ -1287,12 +1307,26 @@ export async function runAcp(opts: {
         if (typeof batch.mode.effort === 'string' && batch.mode.effort.length > 0) {
           await switchEffortIfRequested(batch.mode.effort);
         }
+        const includeAppendSystemPrompt = Boolean(
+          batch.mode.appendSystemPrompt && !appendSystemPromptInjected,
+        );
+        const turnPrompt = buildAcpTurnPrompt({
+          message: batch.message,
+          appendSystemPrompt: batch.mode.appendSystemPrompt,
+          includeAppendSystemPrompt,
+          includeTitleInstruction: firstTurn,
+          isCursorAgent,
+        });
         promptInFlight = true;
         setThinking(true);
         try {
-          await backend.sendPrompt(acpSessionId, batch.message, batch.attachments);
+          await backend.sendPrompt(acpSessionId, turnPrompt, batch.attachments);
         } finally {
           promptInFlight = false;
+        }
+        firstTurn = false;
+        if (includeAppendSystemPrompt) {
+          appendSystemPromptInjected = true;
         }
         await turnEnded;
         setThinking(false);

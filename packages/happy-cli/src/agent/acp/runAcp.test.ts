@@ -233,6 +233,7 @@ vi.mock('./AcpBackend', async (importOriginal) => {
   };
 });
 
+import { buildAcpTurnPrompt } from './acpPrompt';
 import { runAcp } from './runAcp';
 
 describe('runAcp', () => {
@@ -371,7 +372,12 @@ describe('runAcp', () => {
     expect(mocks.backendState.constructorArgs.args).toEqual(['--acp']);
     expect(mocks.backendState.prompts[0]).toEqual({
       sessionId: 'acp-session-1',
-      prompt: 'Build a test plan',
+      prompt: buildAcpTurnPrompt({
+        message: 'Build a test plan',
+        includeAppendSystemPrompt: false,
+        includeTitleInstruction: true,
+        isCursorAgent: false,
+      }),
     });
 
     const envelopeTypes = mocks.mockSession.sendSessionProtocolMessage.mock.calls.map(([envelope]) => envelope.ev.t);
@@ -1317,11 +1323,130 @@ describe('runAcp', () => {
 
     await vi.waitFor(() => {
       expect(mocks.backendState.prompts).toEqual([
-        { sessionId: 'acp-session-reset-1', prompt: 'Hello after clear' },
+        {
+          sessionId: 'acp-session-reset-1',
+          prompt: buildAcpTurnPrompt({
+            message: 'Hello after clear',
+            includeAppendSystemPrompt: false,
+            includeTitleInstruction: true,
+            isCursorAgent: true,
+          }),
+        },
       ]);
     });
 
     await mocks.getKillHandler()!();
     await runPromise;
+  });
+
+  it('aligns Cursor prompt scaffolding with Claude/Codex across first turn, follow-ups, /clear, and resume', async () => {
+    const APPEND = '# Options\n\n<options><option>OK</option></options>';
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    expect(mocks.backendState.constructorArgs.mcpServers).toEqual({
+      happy: {
+        command: process.execPath,
+        args: ['--no-warnings', '--no-deprecation', '/tmp/happy/bin/happy-mcp.mjs', '--url', 'http://127.0.0.1:9876'],
+      },
+    });
+    expect(mocks.backendState.constructorArgs.hasChangeTitleInstruction('call change_title')).toBe(true);
+
+    // 1. First turn injects both appendSystemPrompt and Cursor change_title instruction
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'First question' },
+      meta: { appendSystemPrompt: APPEND },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+    expect(mocks.backendState.prompts[0]?.prompt).toBe(
+      buildAcpTurnPrompt({
+        message: 'First question',
+        appendSystemPrompt: APPEND,
+        includeAppendSystemPrompt: true,
+        includeTitleInstruction: true,
+        isCursorAgent: true,
+      }),
+    );
+
+    // 2. Follow-up turn sends plain user message with no scaffolding
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Follow-up question' },
+      meta: { appendSystemPrompt: APPEND },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(2);
+    });
+    expect(mocks.backendState.prompts[1]?.prompt).toBe('Follow-up question');
+
+    // 3. /clear resets ACP context: re-injects appendSystemPrompt without forcing a title reset
+    mocks.mockSession.sendSessionEvent.mockClear();
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: '/clear' },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.resetSessionCalls).toBe(1);
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+    });
+
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'After clear' },
+      meta: { appendSystemPrompt: APPEND },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(3);
+    });
+    expect(mocks.backendState.prompts[2]?.prompt).toBe(
+      buildAcpTurnPrompt({
+        message: 'After clear',
+        appendSystemPrompt: APPEND,
+        includeAppendSystemPrompt: true,
+        includeTitleInstruction: false,
+        isCursorAgent: true,
+      }),
+    );
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+  });
+
+  it('skips first-turn scaffolding on resumed sessions and re-enables appendSystemPrompt if loadSession falls back', async () => {
+    const APPEND = '# Options\n\n<options><option>OK</option></options>';
+    const resumeRunPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+      resumeAgentSessionId: 'existing-cursor-sess',
+    });
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Continue resumed chat' },
+      meta: { appendSystemPrompt: APPEND },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+    expect(mocks.backendState.prompts[0]?.prompt).toBe('Continue resumed chat');
+
+    await mocks.getKillHandler()!();
+    await resumeRunPromise;
   });
 });

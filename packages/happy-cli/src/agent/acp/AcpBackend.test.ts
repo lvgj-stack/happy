@@ -195,6 +195,22 @@ describe('selectPermissionOutcome & isHappyChangeTitleTool', () => {
     })).toBe(true);
 
     expect(isHappyChangeTitleTool({
+      toolName: 'other',
+      toolCallId: 'mcp-dyn-1',
+      title: 'MCP: tool',
+      kind: 'other',
+      input: { providerIdentifier: 'happy', toolName: 'change_title', args: { title: 'New title' } },
+    })).toBe(true);
+
+    expect(isHappyChangeTitleTool({
+      toolName: 'other',
+      toolCallId: 'mcp-dyn-2',
+      title: 'MCP: tool',
+      kind: 'other',
+      input: { providerIdentifier: 'other-mcp', toolName: 'change_title' },
+    })).toBe(false);
+
+    expect(isHappyChangeTitleTool({
       toolName: 'execute',
       toolCallId: 'exec-1',
       title: 'happy-change_title: change_title',
