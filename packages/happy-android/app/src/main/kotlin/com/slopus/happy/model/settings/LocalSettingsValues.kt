@@ -22,6 +22,8 @@ data class LocalSettingsValues(
     /** CMD+K command palette (web only). */
     val commandPaletteEnabled: Boolean = false,
     val themePreference: ThemePreference = ThemePreference.Adaptive,
+    /** Happy Agent list icons on this phone; relay accounts use their synced showFlavorIcons. */
+    val agentShowHarnessIconsInSessionList: Boolean = true,
     val markdownCopyV2: Boolean = false,
     val consoleLoggingEnabled: Boolean = false,
     val verboseLogging: Boolean = false,
@@ -56,6 +58,7 @@ data class LocalSettingsValues(
             "voiceUpsellOverride" to voiceUpsellOverride.toJson(),
             "commandPaletteEnabled" to JsonPrimitive(commandPaletteEnabled),
             "themePreference" to JsonPrimitive(themePreference.wire),
+            "agentShowHarnessIconsInSessionList" to JsonPrimitive(agentShowHarnessIconsInSessionList),
             "markdownCopyV2" to JsonPrimitive(markdownCopyV2),
             "consoleLoggingEnabled" to JsonPrimitive(consoleLoggingEnabled),
             "verboseLogging" to JsonPrimitive(verboseLogging),
@@ -102,6 +105,7 @@ data class LocalSettingsValues(
                     commandPaletteEnabled = bool("commandPaletteEnabled", false),
                     themePreference = json["themePreference"]?.asEnum(ThemePreference.entries.map { it.wire })
                         ?.let { w -> ThemePreference.entries.first { it.wire == w } } ?: ThemePreference.Adaptive,
+                    agentShowHarnessIconsInSessionList = bool("agentShowHarnessIconsInSessionList", true),
                     markdownCopyV2 = bool("markdownCopyV2", false),
                     consoleLoggingEnabled = bool("consoleLoggingEnabled", false),
                     verboseLogging = bool("verboseLogging", false),

@@ -297,13 +297,13 @@ internal fun NavHostController.leaveSessionInfo(sessionId: String, successor: St
     }
 }
 
-/** The synced avatar settings, for every avatar under [content]. */
+/** Avatar settings everywhere; agent accounts override the list flag with their device-local preference. */
 @Composable
-fun ProvideAvatarSettings(settings: Settings, content: @Composable () -> Unit) {
-    val avatars = remember(settings.avatarMonochrome, settings.showFlavorIcons, settings.showHarnessIconInSessionHeader) {
+fun ProvideAvatarSettings(settings: Settings, showListHarnessIcons: Boolean = settings.showFlavorIcons, content: @Composable () -> Unit) {
+    val avatars = remember(settings.avatarMonochrome, showListHarnessIcons, settings.showHarnessIconInSessionHeader) {
         AvatarSettings(
             monochrome = settings.avatarMonochrome,
-            showFlavorIcons = settings.showFlavorIcons,
+            showFlavorIcons = showListHarnessIcons,
             showHarnessIconInSessionHeader = settings.showHarnessIconInSessionHeader,
         )
     }

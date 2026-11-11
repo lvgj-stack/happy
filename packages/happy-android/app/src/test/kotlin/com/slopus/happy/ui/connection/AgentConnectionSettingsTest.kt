@@ -398,6 +398,15 @@ class AgentConnectionSettingsTest {
     }
 
     @Test
+    fun appearanceOffersTheHarnessIconSwitch() {
+        rule.setHappyContent {
+            AgentAppearanceScreen(ThemePreference.Adaptive, {}, projectsHidden = false, onProjectsHidden = {}, onBack = {})
+        }
+        rule.node("agentPages.harnessIcons").performScrollTo().assertIsOn()
+        rule.onNodeWithText("Display harness icons next to session titles").assertIsDisplayed()
+    }
+
+    @Test
     fun theProfilePageHasThePictureChangePhotoTheNameAndRemove() {
         val done = mutableListOf<String>()
         val state = AgentProfileState(WireProfile(name = "Steve", photo = WireProfilePhoto("abc"), version = "v1"))

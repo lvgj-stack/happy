@@ -2,29 +2,40 @@ package com.slopus.happy.ui
 
 import android.content.Context
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasTestTag
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.navigation.compose.ComposeNavigator
+import androidx.navigation.NavHostController
 import com.slopus.happy.AppGraph
 import com.slopus.happy.OpenAccount
 import com.slopus.happy.accounts.AccountStore
 import com.slopus.happy.auth.ExpoSecureStore
 import com.slopus.happy.config.ServerConfig
+import com.slopus.happy.config.LocalSettings
 import com.slopus.happy.connection.AgentConnectionCredentials
 import com.slopus.happy.connection.AgentConnections
 import com.slopus.happy.crypto.Base64Variant
 import com.slopus.happy.crypto.SecretKeyBackup
 import com.slopus.happy.crypto.encodeBase64
+import com.slopus.happy.model.settings.LocalSettingsValues
+import com.slopus.happy.ui.components.SessionHarnessIcon
 import com.slopus.happy.sync.eventually
 import com.slopus.happy.testing.FakeHappyServer
 import com.slopus.happy.testing.SoftwareKeys
 import com.slopus.happy.ui.connection.AgentHomeTags
+import com.slopus.happy.ui.connection.AgentAppearanceRoute
+import com.slopus.happy.ui.connection.AgentPagesTags
 import com.slopus.happy.ui.home.HomeTags
 import com.slopus.happy.ui.settings.SettingsPageTags
 import com.slopus.happy.ui.start.StartTags
@@ -34,6 +45,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,6 +130,72 @@ class AccountSwitchTest {
         assertFalse("$seen", OpenAccount.None in seen)
         // One change per switch.
         assertEquals(listOf(OpenAccount.Happy(happy)) + List(3) { listOf(OpenAccount.Agent(agent), OpenAccount.Happy(happy)) }.flatten(), seen.toList())
+    }
+
+    /** The real app provider follows each account kind's stored choice, independently of the relay database. */
+    @Test
+    fun agentHarnessPreferenceSurvivesRealAccountSwitches() {
+        val happy = happyId()
+        graph.settings.change { it.copy(showFlavorIcons = true) }
+        graph.localSettings.change {
+            LocalSettingsValues.parse(JsonObject(it.toJson() + ("agentShowHarnessIconsInSessionList" to JsonPrimitive(false))))
+        }
+        val probeRoute = "test-harness-preference"
+        var currentNav: NavHostController? = null
+        rule.setContent {
+            HappyApp(graph, onNavigationReady = { currentNav = it })
+        }
+        fun showProbe() {
+            rule.runOnUiThread {
+                val nav = checkNotNull(currentNav)
+                if (nav.graph.findNode(probeRoute) == null) {
+                    val navigator = nav.navigatorProvider.getNavigator<ComposeNavigator>("composable")
+                    nav.graph.addDestination(ComposeNavigator.Destination(navigator) {
+                        SessionHarnessIcon(clientId = "rig")
+                    }.apply { route = probeRoute })
+                }
+                if (nav.currentDestination?.route != probeRoute) nav.navigate(probeRoute)
+            }
+            rule.waitForIdle()
+        }
+        rule.waitUntilAtLeastOneExists(hasTestTag(HomeTags.BAR), 10_000)
+        showProbe()
+        rule.waitUntilAtLeastOneExists(hasTestTag("session.harnessIcon"), 10_000)
+
+        runBlocking { graph.open(agent).join() }
+        rule.waitUntilAtLeastOneExists(hasTestTag(AgentHomeTags.BAR), 10_000)
+        showProbe()
+        rule.onAllNodesWithTag("session.harnessIcon", useUnmergedTree = true).assertCountEquals(0)
+
+        runBlocking { graph.open(happy).join() }
+        rule.waitUntilAtLeastOneExists(hasTestTag(HomeTags.BAR), 10_000)
+        showProbe()
+        rule.waitUntilAtLeastOneExists(hasTestTag("session.harnessIcon"), 10_000)
+        assertTrue(graph.settings.settings.value.showFlavorIcons)
+
+        runBlocking { graph.open(agent).join() }
+        rule.waitUntilAtLeastOneExists(hasTestTag(AgentHomeTags.BAR), 10_000)
+        showProbe()
+        rule.onAllNodesWithTag("session.harnessIcon", useUnmergedTree = true).assertCountEquals(0)
+
+        rule.runOnUiThread { checkNotNull(currentNav).navigate(AgentAppearanceRoute(agent)) }
+        rule.node(AgentPagesTags.HARNESS_ICONS).performScrollTo().assertIsOff().performClick()
+        rule.node(AgentPagesTags.HARNESS_ICONS).assertIsOn()
+        val prefs = context.getSharedPreferences(LocalSettings.PREFS_NAME, Context.MODE_PRIVATE)
+        assertTrue(LocalSettings(prefs).values.value.agentShowHarnessIconsInSessionList)
+        showProbe()
+        rule.waitUntilAtLeastOneExists(hasTestTag("session.harnessIcon"), 10_000)
+
+        // The relay can choose the opposite value without resetting the agent's saved choice.
+        runBlocking { graph.open(happy).join() }
+        rule.waitUntilAtLeastOneExists(hasTestTag(HomeTags.BAR), 10_000)
+        showProbe()
+        graph.settings.change { it.copy(showFlavorIcons = false) }
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("session.harnessIcon", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+        runBlocking { graph.open(agent).join() }
+        rule.waitUntilAtLeastOneExists(hasTestTag(AgentHomeTags.BAR), 10_000)
+        showProbe()
+        rule.waitUntilAtLeastOneExists(hasTestTag("session.harnessIcon"), 10_000)
     }
 
     /** Steps the UI a frame at a time until [done], failing the moment the first screen shows. */

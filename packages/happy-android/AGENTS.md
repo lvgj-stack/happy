@@ -382,6 +382,8 @@ win:
   with a 6 dp gap, in flat, project/worktree, archived, bot/task and agent
   connection lists. The existing Appearance switch (`showFlavorIcons`)
   defaults to on on Android; an explicit saved off value is respected.
+  Happy CLI keeps its synced account choice; Happy Agent's Appearance page
+  keeps its choice on this phone (`agentShowHarnessIconsInSessionList`).
   List avatars carry no duplicate harness badge. Happy Agent uses Happy's
   icon, regardless of provider; unknown metadata gets a generic chip.
 - **Legacy tasks** (iOS 36b11c5bf): a Happy Agent session with

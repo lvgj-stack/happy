@@ -120,15 +120,17 @@ fun HappyApp(graph: AppGraph, onNavigationReady: (NavHostController) -> Unit = {
     val theme by graph.localSettings.themePreference.collectAsStateWithLifecycle()
     val language by graph.language.language.collectAsStateWithLifecycle()
     val settings by graph.settings.settings.collectAsStateWithLifecycle()
+    val localSettings by graph.localSettings.values.collectAsStateWithLifecycle()
+    val open by graph.openAccount.collectAsStateWithLifecycle()
     val animatedAvatars by graph.liveAvatars.enabled.collectAsStateWithLifecycle()
 
     // Avatar.tsx reads the avatar settings everywhere: the chat header and Settings as well as Home.
-    LocalizedContent(language.locale) { HappyTheme(preference = theme) { ProvideAvatarSettings(settings) { CompositionLocalProvider(LocalVoiceController provides graph.voice, LocalAnimatedAvatars provides animatedAvatars) {
+    val showListHarnessIcons = if (open is OpenAccount.Agent) localSettings.agentShowHarnessIconsInSessionList else settings.showFlavorIcons
+    LocalizedContent(language.locale) { HappyTheme(preference = theme) { ProvideAvatarSettings(settings, showListHarnessIcons) { CompositionLocalProvider(LocalVoiceController provides graph.voice, LocalAnimatedAvatars provides animatedAvatars) {
         val dark = HappyTheme.colors.dark
         // In the frame that composes it, before that frame is drawn: the window's colour is the theme's from the first frame.
         SideEffect { onDarkThemeChange(dark) }
 
-        val open by graph.openAccount.collectAsStateWithLifecycle()
         val agent = (open as? OpenAccount.Agent)?.id
         val signedIn = open is OpenAccount.Happy
         val dissolve = remember { Dissolve() }

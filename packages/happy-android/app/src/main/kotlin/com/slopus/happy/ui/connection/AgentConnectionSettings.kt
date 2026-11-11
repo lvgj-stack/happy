@@ -531,6 +531,7 @@ internal fun AgentConnectionSettings(graph: AppGraph, nav: NavHostController, co
     val personState = session?.profile?.state?.collectAsStateWithLifecycle()?.value ?: AgentProfileState()
     val personPhoto = rememberPhoto(session?.profile?.photo?.collectAsStateWithLifecycle()?.value)
     val theme by graph.localSettings.themePreference.collectAsStateWithLifecycle()
+    val localSettings by graph.localSettings.values.collectAsStateWithLifecycle()
     val sound = session?.completionSound?.collectAsStateWithLifecycle()?.value ?: CompletionSound.Always
     val projectsHidden = session?.projectsHidden?.collectAsStateWithLifecycle()?.value ?: false
     val toolCallsGrouped by graph.toolCallsGrouped.enabled.collectAsStateWithLifecycle()
@@ -587,6 +588,8 @@ internal fun AgentConnectionSettings(graph: AppGraph, nav: NavHostController, co
         appearance = agentAppearanceSections(
             theme, graph.localSettings::setThemePreference, projectsHidden, { session?.setProjectsHidden(it) }, sound, { session?.setCompletionSound(it) },
             projectsAvailable = !cloud, toolCallsGrouped = toolCallsGrouped, onToolCallsGrouped = graph.toolCallsGrouped::set,
+            harnessIcons = localSettings.agentShowHarnessIconsInSessionList,
+            onHarnessIcons = { enabled -> graph.localSettings.change { it.copy(agentShowHarnessIconsInSessionList = enabled) } },
         ).flatMap { it.rows },
         scroll = scroll,
         voice = rememberAgentVoiceSummary(graph.offers, graph.subscription),

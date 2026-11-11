@@ -162,7 +162,7 @@ class FontScaleLayoutTest {
         assertDp("title line", line(17, 22), title.height)
         assertDp("project line", line(15, 20), project.height)
         assertTrue("title grows past 22", title.height > 30.dp)
-        assertDp("title still 84 in", 84, title.left)
+        assertDp("title after the fixed-size harness icon and gap", 106, title.left)
         assertDp("title still 10 down", row.top + 10.dp, title.top)
         assertDp("avatar stays 40", 40, rule.node(FlatRowTags.AVATAR).bounds.height)
         assertDp("row: 10, the title, project and workspace lines and 1, 10", 20.dp + line(17, 22) + line(15, 20) + 1.dp + line(13, 18), row.height)

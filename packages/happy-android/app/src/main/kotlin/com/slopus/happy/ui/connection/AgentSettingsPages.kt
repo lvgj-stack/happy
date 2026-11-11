@@ -95,7 +95,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
-/** An agent connection's Appearance: the theme and the desktop's Hide projects; [reveal] as on settings. */
+/** An agent connection's Appearance: theme, projects, sound and this phone's harness icons; [reveal] as on settings. */
 @Serializable data class AgentAppearanceRoute(val connectionId: String, val reveal: String? = null)
 
 /** The person's own profile on an agent connection. */
@@ -107,6 +107,7 @@ internal fun NavGraphBuilder.agentSettingsPages(graph: AppGraph, nav: NavHostCon
         val id = route.connectionId
         val session = remember(id) { graph.agentSessions.session(id) }
         val theme by graph.localSettings.themePreference.collectAsStateWithLifecycle()
+        val localSettings by graph.localSettings.values.collectAsStateWithLifecycle()
         val hidden = session?.projectsHidden?.collectAsStateWithLifecycle()?.value ?: false
         val sound = session?.completionSound?.collectAsStateWithLifecycle()?.value ?: CompletionSound.Always
         val grouped by graph.toolCallsGrouped.enabled.collectAsStateWithLifecycle()
@@ -122,6 +123,8 @@ internal fun NavGraphBuilder.agentSettingsPages(graph: AppGraph, nav: NavHostCon
                 projectsAvailable = session?.client?.cloud == false,
                 toolCallsGrouped = grouped,
                 onToolCallsGrouped = graph.toolCallsGrouped::set,
+                harnessIcons = localSettings.agentShowHarnessIconsInSessionList,
+                onHarnessIcons = { enabled -> graph.localSettings.change { it.copy(agentShowHarnessIconsInSessionList = enabled) } },
             )
         }
     }
@@ -217,6 +220,8 @@ object AgentPagesTags {
     const val HIDE_PROJECTS_ROW = "agentPages.hideProjectsRow"
     const val GROUP_TOOL_CALLS = "agentPages.groupToolCalls"
     const val GROUP_TOOL_CALLS_ROW = "agentPages.groupToolCallsRow"
+    const val HARNESS_ICONS = "agentPages.harnessIcons"
+    const val HARNESS_ICONS_ROW = "agentPages.harnessIconsRow"
     fun sound(sound: CompletionSound) = "agentPages.sound.${sound.name}"
     const val PICTURE = "agentPages.picture"
     const val CHANGE_PHOTO = "agentPages.changePhoto"
@@ -249,7 +254,8 @@ internal fun AgentPage(title: String, onBack: () -> Unit, listModifier: Modifier
  * tool calls, kept on this phone and on unless turned off, which its chats
  * follow ([com.slopus.happy.conversation.ToolSections]). Then desktop's
  * Completion sound (Always, When focused, Never), the connection's own
- * setting too, which the chime follows here ([com.slopus.happy.agent.CompletionWatch]).
+ * setting too, which the chime follows here ([com.slopus.happy.agent.CompletionWatch]);
+ * and this phone's session-list harness icon preference.
  */
 @Composable
 fun AgentAppearanceScreen(
@@ -263,8 +269,10 @@ fun AgentAppearanceScreen(
     projectsAvailable: Boolean = true,
     toolCallsGrouped: Boolean = true,
     onToolCallsGrouped: (Boolean) -> Unit = {},
+    harnessIcons: Boolean = true,
+    onHarnessIcons: (Boolean) -> Unit = {},
 ) {
-    val sections = agentAppearanceSections(theme, onTheme, projectsHidden, onProjectsHidden, completionSound, onCompletionSound, projectsAvailable, toolCallsGrouped, onToolCallsGrouped)
+    val sections = agentAppearanceSections(theme, onTheme, projectsHidden, onProjectsHidden, completionSound, onCompletionSound, projectsAvailable, toolCallsGrouped, onToolCallsGrouped, harnessIcons, onHarnessIcons)
     AgentPage(stringResource(R.string.settings_appearance), onBack) {
         for (section in sections) SettingsCard(section)
     }
@@ -282,6 +290,8 @@ fun agentAppearanceSections(
     projectsAvailable: Boolean = true,
     toolCallsGrouped: Boolean = true,
     onToolCallsGrouped: (Boolean) -> Unit = {},
+    harnessIcons: Boolean = true,
+    onHarnessIcons: (Boolean) -> Unit = {},
 ): List<SettingsSection> = listOfNotNull(
     SettingsSection(
         listOf(
@@ -342,6 +352,20 @@ fun agentAppearanceSections(
         },
         footer = stringResource(R.string.agent_settings_completion_sound_footer),
         title = stringResource(R.string.agent_settings_completion_sound),
+    ),
+    SettingsSection(
+        listOf(
+            SettingsEntry(
+                id = AgentPagesTags.HARNESS_ICONS_ROW,
+                title = stringResource(R.string.settings_appearance_show_harness_icons_in_session_list),
+                icon = { SettingsTile(Ionicon.AppsOutline, SettingsTiles.purple) },
+                toggle = harnessIcons,
+                onToggle = onHarnessIcons,
+                toggleTag = AgentPagesTags.HARNESS_ICONS,
+                chevron = false,
+            ),
+        ),
+        footer = stringResource(R.string.android_session_list_harness_icons_description),
     ),
 )
 
