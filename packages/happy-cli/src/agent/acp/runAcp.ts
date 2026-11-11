@@ -10,6 +10,8 @@ import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
+import { downloadCodexFileEventAttachment } from '@/codex/utils/attachmentEvents';
+import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 import { hashObject } from '@/utils/deterministicJson';
 import { Credentials, readSettings } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/run';
@@ -897,6 +899,15 @@ export async function runAcp(opts: {
       return;
     }
 
+    if (msg.type === 'event' && msg.name === 'images_skipped') {
+      const count = isRecord(msg.payload) && typeof msg.payload.count === 'number' ? msg.payload.count : 0;
+      const displayAgent = sessionFlavor === 'cursor' ? 'Cursor' : opts.agentName;
+      session.sendSessionEvent({
+        type: 'message',
+        message: `${displayAgent} could not read ${count} image(s); sent the text only.`,
+      });
+    }
+
     if (msg.type === 'event' && msg.name === 'session_resume_failed') {
       const payload = isRecord(msg.payload) ? msg.payload : {};
       const reason = typeof payload.reason === 'string' && payload.reason.trim().length > 0
@@ -1089,7 +1100,15 @@ export async function runAcp(opts: {
 
   backend.onMessage(onBackendMessage);
 
-  session.onUserMessage((message) => {
+  // Images arrive as file events just before the text they belong to. Start
+  // each download right away; the next user message claims them in order.
+  session.onFileEvent((fileEvent) => {
+    logger.debug(`[${opts.agentName}] File event received (${fileEvent.content.data.ev.size} bytes)`);
+    session.trackAttachmentDownload(downloadCodexFileEventAttachment(session, fileEvent));
+  });
+
+  session.onUserMessage(createSerialAsyncHandler(async (message) => {
+    const attachments = await session.drainAttachmentsForUserMessage();
     if (!message.content.text) {
       return;
     }
@@ -1123,8 +1142,10 @@ export async function runAcp(opts: {
       permissionMode: currentPermissionMode,
       model: currentModel,
       effort: currentEffort,
-    });
-  });
+    }, attachments);
+  }, (error) => {
+    logger.debug(`[${opts.agentName}] Failed to queue user message:`, error);
+  }));
   session.keepAlive(thinking, 'remote');
 
   const keepAliveInterval = setInterval(() => {
@@ -1269,7 +1290,7 @@ export async function runAcp(opts: {
         promptInFlight = true;
         setThinking(true);
         try {
-          await backend.sendPrompt(acpSessionId, batch.message);
+          await backend.sendPrompt(acpSessionId, batch.message, batch.attachments);
         } finally {
           promptInFlight = false;
         }

@@ -35,7 +35,34 @@ import type {
 } from '../core';
 import { logger } from '@/ui/logger';
 import { delay } from '@/utils/time';
+import type { PendingAttachment } from '@/utils/MessageQueue2';
+import { detectSupportedImageType } from '@/codex/utils/imageInput';
 import packageJson from '../../../package.json';
+
+/**
+ * Turns a user turn into ACP prompt content: image blocks first, then the text.
+ * Images are labelled by their magic bytes, not the client-supplied mimeType;
+ * ones the agent cannot read (no `promptCapabilities.image`) or in an
+ * unrecognised format are left out and counted.
+ */
+export function buildAcpPromptBlocks(
+  prompt: string,
+  images: PendingAttachment[],
+  agentReadsImages: boolean,
+): { blocks: ContentBlock[]; skippedImages: number } {
+  const blocks: ContentBlock[] = [];
+  let skippedImages = 0;
+  for (const image of images) {
+    const detected = agentReadsImages ? detectSupportedImageType(image.data) : null;
+    if (!detected) {
+      skippedImages += 1;
+      continue;
+    }
+    blocks.push({ type: 'image', mimeType: detected.mimeType, data: Buffer.from(image.data).toString('base64') });
+  }
+  blocks.push({ type: 'text', text: prompt });
+  return { blocks, skippedImages };
+}
 
 /**
  * Retry configuration for ACP operations
@@ -450,6 +477,8 @@ export class AcpBackend implements AgentBackend {
   private connection: ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private disposed = false;
+  /** From the agent's initialize response: whether prompts may carry image blocks. */
+  private agentReadsImages = false;
   /** Track active tool calls to prevent duplicate events */
   private activeToolCalls = new Set<string>();
   private toolCallTimeouts = new Map<string, NodeJS.Timeout>();
@@ -881,6 +910,7 @@ export class AcpBackend implements AgentBackend {
         }
       );
       logger.debug(`[AcpBackend] Initialize completed`);
+      this.agentReadsImages = initializeResponse.agentCapabilities?.promptCapabilities?.image === true;
       if (this.options.verbose) {
         logAcpBackendMuted(
           `Incoming initialize response from ${this.options.agentName}: ${summarizeSessionMetadataPayload(initializeResponse)}`,
@@ -1308,7 +1338,11 @@ export class AcpBackend implements AgentBackend {
   private idleResolver: (() => void) | null = null;
   private waitingForResponse = false;
 
-  async sendPrompt(sessionId: SessionId, prompt: string): Promise<void> {
+  /**
+   * Sends one user turn. Images the agent cannot read are left out and
+   * reported as an `images_skipped` event so the runner can tell the user.
+   */
+  async sendPrompt(sessionId: SessionId, prompt: string, images: PendingAttachment[] = []): Promise<void> {
     // Check if prompt contains change_title instruction (via optional callback)
     const promptHasChangeTitle = this.options.hasChangeTitleInstruction?.(prompt) ?? false;
 
@@ -1334,20 +1368,23 @@ export class AcpBackend implements AgentBackend {
       logger.debug(`[AcpBackend] Sending prompt (length: ${prompt.length}): ${prompt.substring(0, 100)}...`);
       logger.debug(`[AcpBackend] Full prompt: ${prompt}`);
       
-      const contentBlock: ContentBlock = {
-        type: 'text',
-        text: prompt,
-      };
+      const { blocks, skippedImages } = buildAcpPromptBlocks(prompt, images, this.agentReadsImages);
+      if (images.length > 0) {
+        logger.debug(`[AcpBackend] Prompt carries ${images.length - skippedImages} image(s), skipped ${skippedImages} (agent reads images: ${this.agentReadsImages})`);
+      }
+      if (skippedImages > 0) {
+        this.emit({ type: 'event', name: 'images_skipped', payload: { count: skippedImages } });
+      }
 
       const promptRequest: PromptRequest = {
         sessionId: this.acpSessionId,
-        prompt: [contentBlock],
+        prompt: blocks,
       };
 
-      logger.debug(`[AcpBackend] Prompt request:`, JSON.stringify(promptRequest, null, 2));
+      logger.debug(`[AcpBackend] Prompt request: ${blocks.length} block(s), text length ${prompt.length}`);
       await this.connection.prompt(promptRequest);
       logger.debug('[AcpBackend] Prompt request sent to ACP connection');
-      
+
       // Don't emit 'idle' here - it will be emitted after all message chunks are received
       // The idle timeout in handleSessionUpdate will emit 'idle' after the last chunk
 

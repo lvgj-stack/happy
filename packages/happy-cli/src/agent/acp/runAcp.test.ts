@@ -3,11 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const sessionHandlers = new Map<string, (params: any) => Promise<any> | any>();
   let userMessageHandler: ((message: any) => void) | null = null;
+  let fileEventHandler: ((event: any) => void) | null = null;
+  let pendingDownloads: Array<Promise<any>> = [];
   let killHandler: (() => Promise<void>) | null = null;
 
   const mockSession = {
     onUserMessage: vi.fn((handler: (message: any) => void) => {
       userMessageHandler = handler;
+    }),
+    onFileEvent: vi.fn((handler: (event: any) => void) => {
+      fileEventHandler = handler;
+    }),
+    downloadAndDecryptAttachment: vi.fn(async (_ref: string): Promise<Uint8Array | null> => null),
+    trackAttachmentDownload: vi.fn((promise: Promise<any>) => {
+      pendingDownloads.push(promise);
+    }),
+    drainAttachmentsForUserMessage: vi.fn(async () => {
+      const downloads = pendingDownloads;
+      pendingDownloads = [];
+      return (await Promise.all(downloads)).filter((x) => x !== null);
     }),
     keepAlive: vi.fn(),
     sendSessionProtocolMessage: vi.fn(),
@@ -31,6 +45,7 @@ const mocks = vi.hoisted(() => {
   const backendState = {
     listeners: [] as Array<(message: any) => void>,
     prompts: [] as Array<{ sessionId: string; prompt: string }>,
+    promptImages: [] as Array<Array<{ data: Uint8Array; mimeType: string; name: string }>>,
     setConfigOptionCalls: [] as Array<{ configId: string; value: string }>,
     setModeCalls: [] as string[],
     setModelCalls: [] as string[],
@@ -61,6 +76,11 @@ const mocks = vi.hoisted(() => {
     mockConsoleLog: vi.spyOn(console, 'log').mockImplementation(() => {}),
     sessionHandlers,
     getUserMessageHandler: () => userMessageHandler,
+    getFileEventHandler: () => fileEventHandler,
+    resetFileEvents: () => {
+      fileEventHandler = null;
+      pendingDownloads = [];
+    },
     setUserMessageHandler: (handler: ((message: any) => void) | null) => {
       userMessageHandler = handler;
     },
@@ -160,8 +180,9 @@ vi.mock('./AcpBackend', async (importOriginal) => {
       return { sessionId: `acp-session-reset-${mocks.backendState.resetSessionCalls}` };
     }
 
-    async sendPrompt(sessionId: string, prompt: string) {
+    async sendPrompt(sessionId: string, prompt: string, images: Array<{ data: Uint8Array; mimeType: string; name: string }> = []) {
       mocks.backendState.prompts.push({ sessionId, prompt });
+      mocks.backendState.promptImages.push(images);
       if (mocks.backendState.sendPromptError) {
         throw mocks.backendState.sendPromptError;
       }
@@ -228,6 +249,8 @@ describe('runAcp', () => {
     mocks.setKillHandler(null);
     mocks.backendState.listeners = [];
     mocks.backendState.prompts = [];
+    mocks.backendState.promptImages = [];
+    mocks.resetFileEvents();
     mocks.backendState.setConfigOptionCalls = [];
     mocks.backendState.setModeCalls = [];
     mocks.backendState.setModelCalls = [];
@@ -253,6 +276,71 @@ describe('runAcp', () => {
       url: 'http://127.0.0.1:9876',
       stop: vi.fn(),
     });
+  });
+
+  it('hands images from file events to the agent with the text that follows them', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    mocks.mockSession.downloadAndDecryptAttachment.mockResolvedValueOnce(png);
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+      expect(mocks.getFileEventHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getFileEventHandler()!({
+      role: 'session',
+      content: { type: 'session', data: { id: 'f1', time: 1, role: 'user', ev: { t: 'file', ref: 'ref-1', name: 'shot.png', size: 8, mimeType: 'image/png' } } },
+    });
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'What is in this picture?' } });
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'And now?' } });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts.length).toBeGreaterThanOrEqual(1);
+    });
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts.map((p) => p.prompt).join('\n')).toContain('And now?');
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    expect(mocks.mockSession.downloadAndDecryptAttachment).toHaveBeenCalledWith('ref-1');
+    expect(mocks.backendState.prompts[0].prompt).toContain('What is in this picture?');
+    expect(mocks.backendState.promptImages[0]).toEqual([{ data: png, mimeType: 'image/png', name: 'shot.png' }]);
+    expect(mocks.backendState.promptImages.slice(1).flat()).toEqual([]);
+  });
+
+  it('tells the user when the agent could not read the images', async () => {
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      emit({ type: 'event', name: 'images_skipped', payload: { count: 2 } });
+      emit({ type: 'status', status: 'idle' });
+    };
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'look' } });
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({
+        type: 'message',
+        message: 'Cursor could not read 2 image(s); sent the text only.',
+      });
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
   });
 
   it('wires backend messages through mapper into session envelopes', async () => {
