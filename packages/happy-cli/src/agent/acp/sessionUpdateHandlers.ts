@@ -96,6 +96,12 @@ export function parseArgsFromContent(content: unknown): Record<string, unknown> 
   return {};
 }
 
+function hasToolCallMetadata(update: SessionUpdate): boolean {
+  return Object.keys(parseArgsFromContent(update.content)).length > 0
+    || Object.keys(parseArgsFromContent(update.rawInput)).length > 0
+    || (Array.isArray(update.locations) && update.locations.length > 0);
+}
+
 /**
  * Extract error detail from update content
  */
@@ -199,6 +205,34 @@ export function handleAgentMessageChunk(
   return { handled: true };
 }
 
+/** A `**Header**` line, optionally backticked; section headers ending in ':' are excluded by the caller. */
+const SUMMARY_HEADER_RE = /`?\*\*([^*\n]+?)\*\*`?[ \t]*\n/g;
+
+/**
+ * cursor-agent's thought summarizer sometimes leaks its own drafting notes
+ * ("Thinking Process:\n\n1. **Analyze the Request:** ...", ~4KB) with the real
+ * `**Header**\n\nparagraph` summary appended at the end. Keep only that final
+ * summary; return '' if the draft never reached one. Other text is untouched.
+ */
+export function stripLeakedThoughtSummarizerDraft(text: string): string {
+  if (!/^\s*Thinking Process:/.test(text)) {
+    return text;
+  }
+  const header = [...text.matchAll(SUMMARY_HEADER_RE)]
+    .filter((m) => !m[1].trimEnd().endsWith(':'))
+    .pop();
+  if (!header) {
+    return '';
+  }
+  const body = text
+    .slice(header.index! + header[0].length)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(\\n)+$/.test(line))
+    .join(' ');
+  return `**${header[1].trim()}**\n\n${body}\n\n`;
+}
+
 /**
  * Handle agent_thought_chunk update (Gemini's thinking/reasoning)
  */
@@ -212,9 +246,14 @@ export function handleAgentThoughtChunk(
     return { handled: false };
   }
 
-  const text = (content as { text?: string }).text;
-  if (typeof text !== 'string') {
+  const rawText = (content as { text?: string }).text;
+  if (typeof rawText !== 'string') {
     return { handled: false };
+  }
+  const text = stripLeakedThoughtSummarizerDraft(rawText);
+  if (!text) {
+    logger.debug(`[AcpBackend] Dropped leaked thought-summarizer draft without a summary (${rawText.length} chars)`);
+    return { handled: true };
   }
 
   // Log thinking chunks when tool calls are active
@@ -449,10 +488,15 @@ export function handleToolCallUpdate(
     return { handled: false };
   }
 
-  const toolKind = update.kind || 'unknown';
+  // Cursor sends an empty pending `edit` first, then a metadata-only update
+  // containing its path. Preserve the kind recorded from that placeholder.
+  const toolKind = update.kind || ctx.toolCallIdToNameMap.get(toolCallId) || 'unknown';
   let toolCallCountSincePrompt = ctx.toolCallCountSincePrompt;
 
-  if (status === 'in_progress' || status === 'pending') {
+  const startsCall = status === 'in_progress'
+    || status === 'pending'
+    || (!status && hasToolCallMetadata(update));
+  if (startsCall) {
     if (!ctx.activeToolCalls.has(toolCallId)) {
       toolCallCountSincePrompt++;
       startToolCall(toolCallId, toolKind, update, ctx, 'tool_call_update');
@@ -490,6 +534,17 @@ export function handleToolCall(
 
   if (ctx.activeToolCalls.has(toolCallId)) {
     logger.debug(`[AcpBackend] Tool call ${toolCallId} already in active set, skipping`);
+    return { handled: true };
+  }
+
+  // cursor-agent initially announces edits as `{ kind: "edit",
+  // rawInput: {}, status: "pending" }`, then immediately sends the path in a
+  // metadata-only tool_call_update. Starting on the placeholder permanently
+  // exposes `{}` to clients because the session protocol has no start-update
+  // event, so wait for the enriched update.
+  if (update.kind === 'edit' && !hasToolCallMetadata(update)) {
+    ctx.toolCallIdToNameMap.set(toolCallId, 'edit');
+    logger.debug(`[AcpBackend] Deferring empty edit placeholder ${toolCallId} until metadata arrives`);
     return { handled: true };
   }
 
