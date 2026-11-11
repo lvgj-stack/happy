@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
     setModelCalls: [] as string[],
     startSessionMessages: [] as any[],
     sendPromptError: null as Error | null,
+    sendPromptImpl: null as null | ((emit: (message: any) => void) => Promise<void>),
     startSessionCalls: 0,
     cancelCalls: [] as string[],
     disposeCalls: 0,
@@ -153,6 +154,15 @@ vi.mock('./AcpBackend', async (importOriginal) => {
       if (mocks.backendState.sendPromptError) {
         throw mocks.backendState.sendPromptError;
       }
+      if (mocks.backendState.sendPromptImpl) {
+        const emit = (message: any) => {
+          for (const listener of mocks.backendState.listeners) {
+            listener(message);
+          }
+        };
+        await mocks.backendState.sendPromptImpl(emit);
+        return;
+      }
       for (const listener of mocks.backendState.listeners) {
         listener({ type: 'status', status: 'running' });
         listener({ type: 'model-output', textDelta: 'hello' });
@@ -212,6 +222,7 @@ describe('runAcp', () => {
     mocks.backendState.setModelCalls = [];
     mocks.backendState.startSessionMessages = [];
     mocks.backendState.sendPromptError = null;
+    mocks.backendState.sendPromptImpl = null;
     mocks.backendState.startSessionCalls = 0;
     mocks.backendState.cancelCalls = [];
     mocks.backendState.disposeCalls = 0;
@@ -276,6 +287,52 @@ describe('runAcp', () => {
       'Tool: ReadFile completed (callId=tool-1)',
       'Status: idle',
     ]));
+  });
+
+  it('keeps reporting thinking until the prompt resolves, despite heuristic idle statuses mid-turn', async () => {
+    let finishPrompt!: () => void;
+    let midTurnReached!: () => void;
+    const midTurn = new Promise<void>((resolve) => { midTurnReached = resolve; });
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      emit({ type: 'status', status: 'running' });
+      emit({ type: 'model-output', textDelta: 'Looking around' });
+      // AcpBackend emits idle after a short pause in chunks or once tool calls settle,
+      // while the ACP prompt request (the real turn) is still open.
+      emit({ type: 'status', status: 'idle' });
+      emit({ type: 'tool-call', toolName: 'ReadFile', args: { path: 'README.md' }, callId: 'tool-1' });
+      emit({ type: 'tool-result', toolName: 'ReadFile', result: { ok: true }, callId: 'tool-1' });
+      emit({ type: 'status', status: 'idle' });
+      midTurnReached();
+      await new Promise<void>((resolve) => { finishPrompt = resolve; });
+      emit({ type: 'model-output', textDelta: 'Done' });
+      emit({ type: 'status', status: 'idle' });
+    };
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Investigate' } });
+
+    await midTurn;
+    const lastThinking = () => mocks.mockSession.keepAlive.mock.calls.at(-1)?.[0];
+    expect(lastThinking()).toBe(true);
+    expect(mocks.mockSession.keepAlive.mock.calls.slice(1).map(([thinking]) => thinking)).not.toContain(false);
+
+    finishPrompt();
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+    });
+    expect(lastThinking()).toBe(false);
+
+    await mocks.getKillHandler()!();
+    await runPromise;
   });
 
   it('registers abort handler that cancels the ACP backend session', async () => {

@@ -637,6 +637,18 @@ export async function runAcp(opts: {
   });
 
   let thinking = false;
+  // True while an ACP prompt request is open. The prompt response is what ends
+  // a turn; AcpBackend's `idle` statuses are a heuristic (a pause between chunks,
+  // or the active tool calls settling) and also fire mid-turn, so while a prompt
+  // is open they must not tell the app the agent stopped working.
+  let promptInFlight = false;
+  const setThinking = (next: boolean) => {
+    if (thinking === next) {
+      return;
+    }
+    thinking = next;
+    session.keepAlive(thinking, 'remote');
+  };
   let acpSessionId: string | null = null;
   let shouldExit = false;
   let abortController = new AbortController();
@@ -981,10 +993,10 @@ export async function runAcp(opts: {
       const suffix = msg.detail ? `: ${msg.detail}` : '';
       const statusLine = `Status: ${msg.status}${suffix}`;
       logAcp('muted', statusLine);
-      const nextThinking = msg.status === 'running';
-      if (thinking !== nextThinking) {
-        thinking = nextThinking;
-        session.keepAlive(thinking, 'remote');
+      if (msg.status === 'running') {
+        setThinking(true);
+      } else if (msg.status !== 'idle' || !promptInFlight) {
+        setThinking(false);
       }
       if (msg.status === 'idle') {
         clearPendingTurn();
@@ -1131,8 +1143,15 @@ export async function runAcp(opts: {
         if (typeof batch.mode.model === 'string' && batch.mode.model.length > 0) {
           await switchModelIfRequested(batch.mode.model);
         }
-        await backend.sendPrompt(acpSessionId, batch.message);
+        promptInFlight = true;
+        setThinking(true);
+        try {
+          await backend.sendPrompt(acpSessionId, batch.message);
+        } finally {
+          promptInFlight = false;
+        }
         await turnEnded;
+        setThinking(false);
         sendEnvelopes(sessionManager.endTurn('completed'));
         session.sendSessionEvent({ type: 'ready' });
         if (verbose) {
@@ -1147,6 +1166,7 @@ export async function runAcp(opts: {
           });
           errorReportedForCurrentTurn = true;
         }
+        setThinking(false);
         sendEnvelopes(sessionManager.endTurn('failed'));
         session.sendSessionEvent({ type: 'ready' });
         logAcp('error', `Prompt error from ${opts.agentName}: ${detail}`);
