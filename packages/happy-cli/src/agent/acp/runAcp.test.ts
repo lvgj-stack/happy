@@ -632,7 +632,7 @@ describe('runAcp', () => {
     );
   });
 
-  it('switches ACP model and permission mode when requested values match config options', async () => {
+  it('switches ACP model, permission mode, and effort when requested values match config options', async () => {
     mocks.backendState.startSessionMessages = [
       {
         type: 'event',
@@ -661,6 +661,17 @@ describe('runAcp', () => {
                 { value: 'claude-opus', name: 'Claude Opus' },
               ],
             },
+            {
+              type: 'select',
+              id: 'reasoning-depth',
+              name: 'Thought Level',
+              category: 'thought_level',
+              currentValue: 'mid',
+              options: [
+                { value: 'mid', name: 'Mid' },
+                { value: 'high', name: 'High' },
+              ],
+            },
           ],
         },
       },
@@ -683,6 +694,7 @@ describe('runAcp', () => {
       meta: {
         permissionMode: 'Code',
         model: 'claude-opus',
+        effort: 'high',
       },
     });
 
@@ -696,6 +708,7 @@ describe('runAcp', () => {
     expect(mocks.backendState.setConfigOptionCalls).toEqual([
       { configId: 'permission-mode', value: 'code' },
       { configId: 'model', value: 'claude-opus' },
+      { configId: 'reasoning-depth', value: 'high' },
     ]);
     expect(mocks.backendState.setModeCalls).toEqual([]);
     expect(mocks.backendState.setModelCalls).toEqual([]);

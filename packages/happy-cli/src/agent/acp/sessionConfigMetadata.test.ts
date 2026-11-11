@@ -98,6 +98,9 @@ describe('sessionConfigMetadata', () => {
       { code: 'high', value: 'High' },
     ]);
     expect(next.currentThoughtLevelCode).toBe('medium');
+
+    const switched = mergeAcpSessionConfigIntoMetadata(next, { currentThoughtLevelCode: 'high' });
+    expect(switched.currentThoughtLevelCode).toBe('high');
   });
 
   it('falls back to legacy modes/models when configOptions are not present', () => {

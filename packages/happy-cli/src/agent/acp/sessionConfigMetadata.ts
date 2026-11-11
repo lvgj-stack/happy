@@ -25,6 +25,7 @@ export type AcpSessionConfigSnapshot = {
   modes?: SessionModeState | null;
   models?: SessionModelState | null;
   currentModeId?: string | null;
+  currentThoughtLevelCode?: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -222,6 +223,10 @@ export function mergeAcpSessionConfigIntoMetadata(metadata: Metadata, snapshot: 
 
   if (snapshot.currentModeId) {
     next.currentOperatingModeCode = snapshot.currentModeId;
+  }
+
+  if (snapshot.currentThoughtLevelCode) {
+    next.currentThoughtLevelCode = snapshot.currentThoughtLevelCode;
   }
 
   if (next.flavor === 'cursor' && Array.isArray(next.operatingModes)) {

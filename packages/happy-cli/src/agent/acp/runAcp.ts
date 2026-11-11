@@ -272,6 +272,7 @@ function formatEnvelopeForServerLog(agentName: string, envelope: SessionEnvelope
 type AcpSwitchMode = {
   permissionMode?: string;
   model?: string | null;
+  effort?: string | null;
 };
 
 type AcpSelectableOption = {
@@ -324,7 +325,7 @@ function flattenSelectOptions(options: unknown): AcpSelectableOption[] {
 
 function extractConfigSelector(
   configOptions: SessionConfigOption[],
-  category: 'mode' | 'model',
+  category: 'mode' | 'model' | 'thought_level',
 ): AcpConfigSelector | null {
   const optionMatchesCategory = (option: SessionConfigOption): boolean => {
     if (option.category === category) {
@@ -335,6 +336,10 @@ function extractConfigSelector(
     const name = normalizeComparable(option.name);
     if (category === 'model') {
       return id.includes('model') || name.includes('model');
+    }
+    if (category === 'thought_level') {
+      return id.includes('thought') || id.includes('reasoning') || id.includes('effort')
+        || name.includes('thought') || name.includes('reasoning') || name.includes('effort');
     }
     return id.includes('mode') || id.includes('permission') || name.includes('mode') || name.includes('permission');
   };
@@ -613,8 +618,10 @@ export async function runAcp(opts: {
   const messageQueue = new MessageQueue2<AcpSwitchMode>((mode) => hashObject(mode));
   let currentPermissionMode: string | undefined = opts.permissionMode;
   let currentModel: string | null | undefined = opts.model;
+  let currentEffort: string | null | undefined;
   let modeSelector: AcpConfigSelector | null = null;
   let modelSelector: AcpConfigSelector | null = null;
+  let effortSelector: AcpConfigSelector | null = null;
   let legacyModes: SessionModeState | null = null;
   let legacyModels: SessionModelState | null = null;
   let sawSlashCommands = false;
@@ -844,6 +851,27 @@ export async function runAcp(opts: {
     }
   };
 
+  const switchEffortIfRequested = async (requestedEffort: string): Promise<void> => {
+    if (!requestedEffort || !effortSelector) {
+      return;
+    }
+    const resolved = resolveRequestedCode(effortSelector.options, requestedEffort);
+    if (!resolved) {
+      logger.debug(`[${opts.agentName}] Ignoring unknown ACP effort request: ${requestedEffort}`);
+      return;
+    }
+    if (resolved === effortSelector.currentCode) {
+      return;
+    }
+    const switched = await backend.setSessionConfigOption(effortSelector.configId, resolved);
+    if (switched) {
+      effortSelector.currentCode = resolved;
+      session.updateMetadata((currentMetadata) =>
+        mergeAcpSessionConfigIntoMetadata(currentMetadata, { currentThoughtLevelCode: resolved }),
+      );
+    }
+  };
+
   const onBackendMessage = (msg: AgentMessage) => {
     if (verbose) {
       logAcp('muted', `Outgoing raw backend message from ${opts.agentName}: ${formatUnknownForConsole(msg, ACP_RAW_PREVIEW_CHARS)}`);
@@ -914,6 +942,7 @@ export async function runAcp(opts: {
 
         modeSelector = extractConfigSelector(configOptions, 'mode');
         modelSelector = extractConfigSelector(configOptions, 'model');
+        effortSelector = extractConfigSelector(configOptions, 'thought_level');
         if (verbose) {
           if (modeSelector) {
             sawModes = true;
@@ -932,6 +961,14 @@ export async function runAcp(opts: {
             }
           } else {
             logAcp('muted', `Outgoing model options from ${opts.agentName}: not reported in config options`);
+          }
+          if (effortSelector) {
+            logAcp('muted', `Outgoing effort options from ${opts.agentName} (${effortSelector.options.length}), current=${effortSelector.currentCode}:`);
+            for (const option of effortSelector.options) {
+              logAcp('muted', `  effort=${option.code} label=${option.value}`);
+            }
+          } else {
+            logAcp('muted', `Outgoing effort options from ${opts.agentName}: not reported in config options`);
           }
         }
         if (cursorYoloActive && modeSelector && modeSelector.currentCode !== 'agent') {
@@ -1067,11 +1104,17 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
 
+    if (message.meta && Object.prototype.hasOwnProperty.call(message.meta, 'effort')) {
+      currentEffort = message.meta.effort ?? null;
+      logger.debug(`[${opts.agentName}] Requested ACP effort: ${currentEffort ?? 'null'}`);
+    }
+
     if (parseSpecialCommand(message.content.text).type === 'clear') {
       logger.debug(`[${opts.agentName}] /clear command pushed to isolated queue`);
       messageQueue.pushIsolateAndClear(message.content.text, {
         permissionMode: currentPermissionMode,
         model: currentModel,
+        effort: currentEffort,
       });
       return;
     }
@@ -1079,6 +1122,7 @@ export async function runAcp(opts: {
     messageQueue.push(message.content.text, {
       permissionMode: currentPermissionMode,
       model: currentModel,
+      effort: currentEffort,
     });
   });
   session.keepAlive(thinking, 'remote');
@@ -1190,6 +1234,10 @@ export async function runAcp(opts: {
           if (typeof targetModel === 'string' && targetModel.length > 0) {
             await switchModelIfRequested(targetModel);
           }
+          const targetEffort = batch.mode.effort ?? currentEffort;
+          if (typeof targetEffort === 'string' && targetEffort.length > 0) {
+            await switchEffortIfRequested(targetEffort);
+          }
           session.sendSessionEvent({ type: 'message', message: 'Context was reset' });
           session.sendSessionEvent({ type: 'ready' });
         } catch (error) {
@@ -1214,6 +1262,9 @@ export async function runAcp(opts: {
         }
         if (typeof batch.mode.model === 'string' && batch.mode.model.length > 0) {
           await switchModelIfRequested(batch.mode.model);
+        }
+        if (typeof batch.mode.effort === 'string' && batch.mode.effort.length > 0) {
+          await switchEffortIfRequested(batch.mode.effort);
         }
         promptInFlight = true;
         setThinking(true);
