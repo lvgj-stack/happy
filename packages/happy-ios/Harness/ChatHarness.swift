@@ -74,6 +74,8 @@ final class HarnessSceneDelegate: UIResponder, UIWindowSceneDelegate {
     private var avatarSpeeds: AvatarSpeedHarness?
     private var agentChat: AgentChatHarness?
     private var agentFeed: AgentFeedHarness?
+    private var cloud: CloudHarness?
+    private var people: PeopleHarness?
     private var realFeed: RealFeedHarness?
     private var realVault: RealVaultHarness?
     private var agentTools: AgentToolsHarness?
@@ -151,6 +153,14 @@ final class HarnessSceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
         if let index = arguments.firstIndex(of: "-screen"), arguments.indices.contains(index + 1), arguments[index + 1] == "agentFeed" {
             agentFeed = AgentFeedHarness(window: window, arguments: arguments)
+            return
+        }
+        if let index = arguments.firstIndex(of: "-screen"), arguments.indices.contains(index + 1), arguments[index + 1] == "cloud" {
+            cloud = CloudHarness(window: window, arguments: arguments)
+            return
+        }
+        if let index = arguments.firstIndex(of: "-screen"), arguments.indices.contains(index + 1), arguments[index + 1] == "people" {
+            people = PeopleHarness(window: window, arguments: arguments)
             return
         }
         if let index = arguments.firstIndex(of: "-screen"), arguments.indices.contains(index + 1), arguments[index + 1] == "appMode" {
@@ -738,8 +748,8 @@ extension ChatListView: ProbedChatList {
     var hasKeyboardInput: Bool { ultra.list.hasKeyboardInput }
     var listView: UIView { self }
     var rows: Int { plans.count }
-    var newestInset: CGFloat { contentInsets.top }
-    var oldestInset: CGFloat { contentInsets.bottom }
+    var newestInset: CGFloat { contentInsets.bottom }
+    var oldestInset: CGFloat { contentInsets.top }
 }
 
 /// The agents' transcript as the probe reads it.
@@ -750,20 +760,19 @@ struct AgentProbedList: ProbedChatList {
     var hasKeyboardInput: Bool { transcript.list.hasKeyboardInput }
     var listView: UIView { transcript.list }
     var rows: Int { chat.plans.count }
-    var isDisplayReady: Bool { !chat.plans.isEmpty && transcript.list.loadedItemView(at: 0) != nil }
+    var isDisplayReady: Bool { !chat.plans.isEmpty && transcript.list.items.indices.last.flatMap(transcript.list.loadedItemView(at:)) != nil }
     var visibleMinY: CGFloat { transcript.distanceFromNewest }
     var maximumVisibleMinY: CGFloat { transcript.distanceFromNewest + transcript.distanceFromOldest }
     var contentHeight: CGFloat { CGFloat(transcript.list.contentHeight) }
     var scrollOffset: CGFloat { visibleMinY - newestInset }
-    // Upside down: the list's top inset is the card's end.
-    var newestInset: CGFloat { CGFloat(transcript.list.viewportInsets.top) }
-    var oldestInset: CGFloat { CGFloat(transcript.list.viewportInsets.bottom) }
+    var newestInset: CGFloat { CGFloat(transcript.list.viewportInsets.bottom) }
+    var oldestInset: CGFloat { CGFloat(transcript.list.viewportInsets.top) }
     var isTracking: Bool { transcript.list.isTracking }
     var isDragging: Bool { transcript.list.isDragging }
     var isDecelerating: Bool { transcript.list.isDecelerating }
     var scrollGestureView: UIView { transcript.list.scrollGestureHostView }
     func setVisibleMinY(_ distance: CGFloat) {
-        transcript.list.scrollTo(.init(index: 0, pointOffset: -Double(distance)), transition: .none)
+        transcript.scroll(toDistanceFromNewest: distance)
     }
 }
 #endif

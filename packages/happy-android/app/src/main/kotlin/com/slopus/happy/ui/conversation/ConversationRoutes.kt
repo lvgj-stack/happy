@@ -1,5 +1,12 @@
 package com.slopus.happy.ui.conversation
 
+import com.slopus.happy.agent.Permission
+import com.slopus.happy.analytics.Analytics
+import com.slopus.happy.analytics.AnalyticsEvent
+import com.slopus.happy.analytics.ChatAddress
+import com.slopus.happy.analytics.FailureKind
+import com.slopus.happy.analytics.ProviderKind
+import com.slopus.happy.analytics.SessionClient
 import com.slopus.happy.ui.backStackEntries
 
 import com.slopus.happy.connection.LinkState
@@ -25,6 +32,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
@@ -43,6 +51,7 @@ import com.slopus.happy.conversation.Conversation
 import com.slopus.happy.conversation.ConversationApi
 import com.slopus.happy.conversation.ConversationApiException
 import com.slopus.happy.conversation.ConversationKeeper
+import com.slopus.happy.conversation.ConversationRow
 import com.slopus.happy.conversation.ConversationSignal
 import com.slopus.happy.conversation.HeldConversations
 import com.slopus.happy.conversation.RowTypesetter
@@ -71,6 +80,7 @@ import com.slopus.happy.ui.theme.HappyTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
@@ -171,6 +181,17 @@ fun NavHostController.composeConversation(connectionId: String, attach: Boolean 
     }
 }
 
+/** The conversation [entry] shows, once its screen holds one ([ConversationHolder]); null for any other page. */
+internal fun NavBackStackEntry.shownConversation(): Conversation? {
+    if (!destination.hasRoute<ConversationRoute>()) return null
+    val none = object : ViewModelProvider.Factory {}
+    return try {
+        ViewModelProvider.create(viewModelStore, none)["conversation", ConversationHolder::class].conversation
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /**
  * The chat of [agentId] held on this back stack, if its screen's state is
  * still kept there: a page over it reads what it already shows instead of
@@ -208,6 +229,15 @@ internal fun AgentSession.conversationBytesRequest(): com.slopus.happy.conversat
     }
 }
 
+/** [conversationRequest] for a file's own bytes, as their type: a Happy Cloud attachment's upload. */
+internal fun AgentSession.conversationFileRequest(): com.slopus.happy.conversation.AgentFileRequest = { method, path, body, contentType ->
+    try {
+        client.sendBytes(method, path, body, mapOf("Content-Type" to contentType))
+    } catch (e: AgentApiException) {
+        throw ConversationApiException(e.status, e.code, e.message, e.body as? kotlinx.serialization.json.JsonObject)
+    }
+}
+
 /**
  * [agentId]'s conversation as each of its holders has it
  * ([AgentSession.conversations]): the connection's requests, keeper, read and
@@ -222,7 +252,7 @@ internal fun AgentSession.makeConversation(
     initialChoice: WorkChoice = WorkChoice(),
     created: () -> Unit = {},
 ): Conversation = Conversation(
-    api = ConversationApi(bytesRequest = conversationBytesRequest(), request = conversationRequest()),
+    api = ConversationApi(bytesRequest = conversationBytesRequest(), request = conversationRequest(), cloud = client.cloud, fileRequest = conversationFileRequest()),
     signals = events.signalsFor(agentId),
     // No screen's or call's: a send or draft save in flight finishes after they go.
     scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -241,9 +271,18 @@ internal fun AgentSession.makeConversation(
     typesetter = typesetter,
     read = ::markRead,
     references = references,
+    hasSettingsPage = settingsPages(),
+    cloudFiles = client.cloud,
     preferences = modelPreferences,
     onStarted = ::recordStart,
+    address = { ChatAddress.of(catalog.value, agentId) },
 )
+
+/** Which settings pages this connection has ([com.slopus.happy.ui.connection.SettingsLinks]): a link to any other reads as its words. */
+internal fun AgentSession.settingsPages(): (String) -> Boolean {
+    val cloud = com.slopus.happy.connection.HappyCloud.isServer(server)
+    return { page -> com.slopus.happy.ui.connection.SettingsLinks.place(page, server, cloud) != null }
+}
 
 /** Where [agentId]'s newest history is kept, beside the connection's catalog and gone with it. */
 internal fun AgentSession.conversationKeeper(agentId: String): ConversationKeeper = object : ConversationKeeper {
@@ -252,13 +291,15 @@ internal fun AgentSession.conversationKeeper(agentId: String): ConversationKeepe
     override fun write(value: JsonObject) = keepResource(key, value)
 }
 
-/** The connection's journal as one conversation hears it: its own events, configuration changes, and a resync on every (re)connect. */
+/** The connection's journal as one conversation hears it: its own events, configuration and skill changes, and a resync on every (re)connect. */
 internal fun Flow<AgentEvent>.signalsFor(agentId: String): Flow<ConversationSignal> = mapNotNull { event ->
     when {
         event.type == AgentEvent.HELLO -> ConversationSignal.Resync
         event.agentId == agentId -> ConversationSignal.Event(event.type, event.data)
         // The computer's configuration (its models) changed: every conversation's pickers follow.
         event.type == "config.updated" -> ConversationSignal.Event(event.type, event.data)
+        // Its skills changed: a new chat's "/" list follows.
+        event.type == Conversation.SKILLS_UPDATED -> ConversationSignal.Event(event.type, event.data)
         else -> null
     }
 }
@@ -363,22 +404,25 @@ internal fun SavedStateHandle.takePrefill(prefill: String?): String? {
 
 private const val PREFILLED = "prefilled"
 
-/** An agent connection's link as its chats' headers say it: a computer that didn't answer, or a pairing to redo, is offline. */
-internal fun AgentLinkStatus?.linkState(syncing: Boolean, network: Boolean): LinkState = when {
-    !network -> LinkState.WaitingForNetwork
-    this == null || this == AgentLinkStatus.Connected -> if (syncing) LinkState.Syncing else LinkState.Online
-    this == AgentLinkStatus.Connecting -> LinkState.Connecting
-    else -> LinkState.Offline
+/** `chat_failure_shown` for [row], a Happy Agent conversation's, once per message while fresh. */
+private fun failureShown(row: ConversationRow.Failure, address: ChatAddress) {
+    val event = AnalyticsEvent.ChatFailureShown(FailureKind.of(row.kind), ProviderKind.of(row.providerType), row.pool, address.target, SessionClient.HappyAgent)
+    Analytics.failureShown(row.messageId, row.createdAt, event)
 }
 
-@Composable
-internal fun linkStatusText(status: AgentLinkStatus?, syncing: Boolean = false): String? = when (status) {
-    null, AgentLinkStatus.Connected -> if (syncing) stringResource(R.string.status_syncing) else null
-    AgentLinkStatus.Connecting -> stringResource(R.string.status_connecting)
-    AgentLinkStatus.Offline -> stringResource(R.string.status_offline)
-    AgentLinkStatus.Revoked -> stringResource(R.string.conversation_revoked)
-    AgentLinkStatus.UpdateRequired -> stringResource(R.string.conversation_update_required)
-    AgentLinkStatus.SignInRequired -> stringResource(R.string.team_server_error_sign_in_required)
+/**
+ * An agent connection's link as its chats' headers say it. No link is ever
+ * offline: one not connected is asked again until it is, so it is
+ * connecting, whatever kept it away (a computer that didn't answer, a
+ * pairing to redo: home says those in words of its own). Reading the
+ * snapshot is catching up, not connecting: the computer or server answered
+ * (iOS's `Session.headerState`, `.connected` with the stream down).
+ */
+internal fun AgentLinkStatus?.linkState(syncing: Boolean, network: Boolean): LinkState = when {
+    !network -> LinkState.WaitingForNetwork
+    syncing -> LinkState.Syncing
+    this == null || this == AgentLinkStatus.Connected -> LinkState.Online
+    else -> LinkState.Connecting
 }
 
 @Composable
@@ -421,16 +465,23 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
     val happyLinks = com.slopus.happy.ui.connection.LocalHappyLinks.current
     val references = remember(nav, session, happyLinks) { com.slopus.happy.ui.references.ReferenceOpener(nav, route.connectionId, session.references, happyLinks) }
     val links = remember(nav, computer, conversation.agentId, references) {
-        LinkOpener.agent(context, computer, app = references::open) { url -> nav.navigate(BrowserRoute(route.connectionId, url, conversation.agentId)) }
+        LinkOpener.agent(context, computer, app = references::open, opens = references::opens) { url -> nav.navigate(BrowserRoute(route.connectionId, url, conversation.agentId)) }
     }
     val kept = rememberKeptMedia(graph, session, conversation.agentId)
+    // A team's role writes content; the Chief of Staff, an admin bot, takes words only from those who manage bots.
+    val permissions by session.permissions.collectAsStateWithLifecycle()
+    val chief by remember(session, conversation.agentId) {
+        session.catalog.map { ChatAddress.of(it, conversation.agentId).chiefOfStaff }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(false)
+    val roleCanSend = permissions.allows(if (chief) Permission.BOTS_MANAGE else Permission.CONTENT_WRITE)
     // A command's artwork is read and kept as the agent's other pictures are.
     ProvideLinks(links) { androidx.compose.runtime.CompositionLocalProvider(com.slopus.happy.ui.connection.LocalAgentPictures provides session.pictures) {
         ConversationScreen(
             state = state,
             opensAttach = route.attach,
-            // Offline says why in words of its own; the link on its way spins (iOS 7aee3a9b8).
-            connection = if (link == LinkState.Offline) linkStatusText(status) ?: stringResource(R.string.status_offline) else null,
+            roleCanSend = roleCanSend,
+            roleCanCompose = permissions.canWrite,
+            roleAllows = permissions::allows,
             link = link,
             usage = usage,
             onRefreshUsage = session.usage::refresh,
@@ -450,6 +501,7 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
                     uploads = conversation.uploads,
                     onRemovePicture = conversation::removePicture,
                     onRetryFailure = conversation::retryFailure,
+                    onFailureShown = { row -> failureShown(row, ChatAddress.of(session.catalog.value, conversation.agentId)) },
                     onAnswer = conversation::answer,
                     onLoadOlder = { retry -> conversation.loadOlder(retry) },
                     onOpenArtifact = { row -> nav.openArtifact(route.connectionId, row.ref) },
@@ -474,10 +526,12 @@ private fun ConversationEntry(graph: AppGraph, nav: NavHostController, route: Co
                     onVisible = holder.hold::show,
                     onChoiceChange = holder::setChoice,
                     onCommand = conversation::runCommand,
+                    onQuickReply = conversation::sendReply,
+                    onUiAction = conversation::press,
                     onToggleTurn = conversation::toggleTurn,
                     onToggleMessage = conversation::toggleMessage,
                     onOpenTool = { callId -> nav.navigate(ToolCallRoute(route.connectionId, conversation.agentId, callId)) },
-                    workspace = session::workspaceSource,
+                    workspace = if (session.client.cloud) null else session::workspaceSource,
                     // The values typed into a secret go in this one request to the computer and nowhere else.
                     secrets = SecretRequestActions(
                         secrets = { ConversationApi(session.conversationRequest()).secrets() },

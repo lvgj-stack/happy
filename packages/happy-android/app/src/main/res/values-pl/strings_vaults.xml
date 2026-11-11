@@ -18,6 +18,7 @@
     <string name="vaults_add_tier">Dodaj krok</string>
     <string name="vaults_an_agent">Agent</string>
     <string name="vaults_another_folder">inny folder</string>
+    <string name="vaults_app">Aplikacja</string>
     <string name="vaults_bytes_of">%1$s z %2$s</string>
     <string name="vaults_changed_elsewhere">W międzyczasie zmieniono to gdzie indziej. Spróbuj ponownie.</string>
     <string name="vaults_create">Utwórz</string>
@@ -45,7 +46,6 @@
     <string name="vaults_keep_both">Zachowaj oba</string>
     <string name="vaults_kind">Sejf</string>
     <string name="vaults_line">wiersz %1$d</string>
-    <string name="vaults_markdown_site">Strona Markdown</string>
     <string name="vaults_max_age">Usuwaj wersje starsze niż</string>
     <string name="vaults_max_versions">Zachowuj najwyżej</string>
     <string name="vaults_more_actions">Więcej działań dla %1$s</string>
@@ -54,6 +54,8 @@
     <string name="vaults_move_title">Przenoszenie „%1$s”</string>
     <string name="vaults_move_to_trash">Przenieś do kosza</string>
     <string name="vaults_name">Nazwa</string>
+    <string name="vaults_name_refused">Nie można użyć tej nazwy</string>
+    <string name="vaults_name_reserved">Nazwa nie może kończyć się na „.artifact”.</string>
     <string name="vaults_name_taken">W tym folderze jest już „%1$s”.</string>
     <string name="vaults_name_taken_message">Zastąpić go przesyłanym plikiem? Wcześniejsze wersje zostaną w historii.</string>
     <string name="vaults_name_taken_title">„%1$s” już istnieje</string>
@@ -92,13 +94,6 @@
     <string name="vaults_restored_from">z wersji %1$d</string>
     <string name="vaults_root">główny folder sejfu</string>
     <string name="vaults_save_to_device">Zapisz na urządzeniu</string>
-    <string name="vaults_search">Szukaj</string>
-    <string name="vaults_search_contents">W plikach</string>
-    <string name="vaults_search_hint">Szukaj nazw i tekstu w tym sejfie</string>
-    <string name="vaults_search_more">Wyników jest więcej, niż pokazano. Spróbuj dokładniejszych słów.</string>
-    <string name="vaults_search_names">Nazwy</string>
-    <string name="vaults_search_nothing">Nic nie znaleziono dla „%1$s”</string>
-    <string name="vaults_search_placeholder">Szukaj w sejfie</string>
     <string name="vaults_settings">Ustawienia sejfu</string>
     <string name="vaults_settings_failed">Nie udało się zapisać ustawień</string>
     <string name="vaults_share">Udostępnij</string>
@@ -130,7 +125,6 @@
     <string name="vaults_version_number">Wersja %1$d</string>
     <string name="vaults_versions">Wersje</string>
     <string name="vaults_versions_footer">Najnowsza i przypięte wersje są zawsze zachowywane. Zmiany zaczynają działać w ciągu godziny.</string>
-    <string name="vaults_web_page">Strona internetowa</string>
     <plurals name="vaults_days">
         <item quantity="one">%1$d dzień</item>
         <item quantity="few">%1$d dni</item>
@@ -155,4 +149,5 @@
         <item quantity="many">%1$d wersji</item>
         <item quantity="other">%1$d wersji</item>
     </plurals>
+    <string name="vaults_no_access">Nie masz dostępu do tego sejfu.</string>
 </resources>

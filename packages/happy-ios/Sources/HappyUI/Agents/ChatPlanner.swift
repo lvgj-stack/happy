@@ -24,12 +24,22 @@ actor ChatPlanner {
         var switchTarget: SwitchTarget?
         /// Models' names by ID, for what a failure was switched to.
         var modelNames: [String: String] = [:]
+        /// Whether the person's role may run a failed turn again.
+        var actionable = true
+        /// The server the conversation is on, which says where a settings
+        /// link opens (`SettingsLinkPlace`).
+        var server: String?
+        /// The permissions the person holds, which say which chat UI
+        /// controls they may use; nil for every one (a computer of their own).
+        var uiGranted: Set<String>?
     }
 
     /// A row as it was planned, and what from.
     struct Planned: @unchecked Sendable {
         var item: ChatItem
         var key: Key
+        /// `key`'s number in `plans`; 0 for one it hasn't numbered.
+        var keyNumber: Int
         var copied: Bool
         var opened: Bool
         var proposals: [ProposalShown?]
@@ -91,6 +101,20 @@ actor ChatPlanner {
         self.syntax = syntax
     }
 
+    /// The key each row was last planned with, as a number: the same key
+    /// keeps its number, so a row is told planned with it in one step, not
+    /// by comparing every reference the key holds once per row.
+    private var keys: [(key: Key, number: Int)] = []
+    private var keyNumbers = 0
+
+    private func number(_ key: Key) -> Int {
+        if let known = keys.first(where: { $0.key == key }) { return known.number }
+        keyNumbers += 1
+        // The rows' key and a failure card's: two are all a pass needs.
+        keys = Array((keys + [(key, keyNumbers)]).suffix(4))
+        return keyNumbers
+    }
+
     /// `proposals` are the sidebar proposals the items show, as they stand;
     /// `opened` the other agents' messages opened to read.
     func plans(_ items: [ChatItem], key: Key, copied: String?, opened: Set<String> = [], proposals: [String: ProposalShown] = [:]) -> [ChatRowPlan] {
@@ -101,24 +125,31 @@ actor ChatPlanner {
         var others = key
         others.switchTarget = nil
         others.modelNames = [:]
+        let othersNumber = number(others)
+        var failureNumber: Int?
         var shownTimes: [String: Double?] = [:]
         for var item in items {
             if item.role == .user {
-                if let first = times[item.id] { item.time = first }
+                if let first = times[item.id], item.time != first { item.time = first }
                 shownTimes[item.id] = item.time
             }
             let isCopied = copied == item.id
             let isOpened = opened.contains(item.id)
             let shown = item.proposalIds.map { proposals[$0] }
             var reads = others
-            if case .failure = item.role { reads = key }
+            var readsNumber = othersNumber
+            if case .failure = item.role {
+                reads = key
+                if failureNumber == nil { failureNumber = number(key) }
+                readsNumber = failureNumber ?? 0
+            }
             let plan: ChatRowPlan
-            if let cached = cache[item.id], cached.item == item, cached.key == reads, cached.copied == isCopied, cached.opened == isOpened, cached.proposals == shown {
+            if let cached = cache[item.id], (cached.keyNumber == 0 ? cached.key == reads : cached.keyNumber == readsNumber), cached.item == item, cached.copied == isCopied, cached.opened == isOpened, cached.proposals == shown {
                 plan = cached.plan
             } else {
                 plan = Self.plan(item, key: reads, copied: isCopied, opened: isOpened, syntax: syntax, proposals: proposals)
             }
-            next[item.id] = Planned(item: item, key: reads, copied: isCopied, opened: isOpened, proposals: shown, plan: plan)
+            next[item.id] = Planned(item: item, key: reads, keyNumber: readsNumber, copied: isCopied, opened: isOpened, proposals: shown, plan: plan)
             if plan.size.height > 0 { plans.append(plan) }
         }
         cache.replace(with: next)
@@ -152,6 +183,8 @@ actor ChatPlanner {
                 for (proposal, shown) in zip(row.item.proposalIds, row.proposals) { proposals[proposal] = shown }
                 var next = row
                 next.key = key
+                // Planned at a key `plans` hasn't numbered: told by the key itself.
+                next.keyNumber = 0
                 next.plan = Self.plan(row.item, key: key, copied: row.copied, opened: row.opened, syntax: syntax, proposals: proposals)
                 cache.adopt(next, replacing: row, id: id)
                 planned[id] = next
@@ -177,10 +210,12 @@ actor ChatPlanner {
         }
         guard !item.pieces.isEmpty else { return ChatRowPlan(id: item.id, size: CGSize(width: width, height: 0), items: []) }
         typealias M = MessageLayout.Metrics
-        let text = HappyReferences.plain(item.text, view: key.references.view)
+        let text = HappyReferences.plain(item.text, instanceId: key.references.instanceId, view: key.references.view)
         switch item.role {
         case .agent:
-            return Self.body(item, key: key, syntax: syntax, proposals: proposals, revealable: true) {
+            // Chat UI is there whole, never revealed a character at a time.
+            let revealable = !item.pieces.contains { if case .ui = $0 { true } else if case .quickReplies = $0 { true } else { false } }
+            return Self.body(item, key: key, syntax: syntax, proposals: proposals, revealable: revealable) {
                 MessageLayout.agent(width: width, maxContentWidth: key.maxContentWidth, parts: $0)
             }
         case .user:
@@ -208,6 +243,8 @@ actor ChatPlanner {
             }
             var failure = false
             if case .failed = item.delivery { failure = true }
+            // A suggested reply says so under its bubble.
+            let origin = item.suggested ? Strings.uiSuggested : nil
             // On its way: each picture shows how far it is, and can be
             // taken out; one that failed is sent again with a tap.
             let uploading = item.delivery == .sending || failure
@@ -228,7 +265,7 @@ actor ChatPlanner {
                 fold: body.map { _ in .init(preview: preview.measurable, control: control.measurable, opened: opened, lineHeight: ChatTextStyles.text.lineHeight ?? 24) },
                 // A refusal is the red mark in the slot, as Telegram's: no
                 // line under the bubble, so the row never grows when a send fails.
-                pictures: pictures.map(\.image), showsStatus: false,
+                pictures: pictures.map(\.image), showsStatus: origin != nil,
                 delivery: status, trailing: body?.trailing
             )
             var items: [ChatDrawItem] = []
@@ -246,6 +283,10 @@ actor ChatPlanner {
                 selectable.append(.init(layout: drawn, frame: frame))
             }
             if let frame = layout.foldControl { items.append(.text(control.layout(for: frame), frame)) }
+            if let origin, let frame = layout.status {
+                let line = ChatTextStyles.pendingStatus.string(origin, color: Palette.textSecondary, alignment: .right, lineBreakMode: .byTruncatingTail, in: environment)
+                items.append(.text(ChatTextLayout(line, width: frame.width, maxLines: 1), frame))
+            }
             for (picture, frame) in zip(pictures, layout.pictures) {
                 let key = MediaLoader.sentKey(picture.id)
                 let upload = uploading ? ChatUpload(key: picture.id, failed: failure) : nil
@@ -269,14 +310,14 @@ actor ChatPlanner {
                 items += placed.items
                 if failure { hits.insert(ChatHit(frame: placed.mark.insetBy(dx: -8, dy: -8), action: .retry(localId: item.id)), at: 0) }
             }
-            let label = [text, failure ? Strings.sendFailed : ""].filter { !$0.isEmpty }.joined(separator: ", ")
+            let label = [text, failure ? Strings.sendFailed : "", origin ?? ""].filter { !$0.isEmpty }.joined(separator: ", ")
             let shape = layout.bubble.map { ChatBox(frame: $0, fill: Palette.userBubble, radius: M.bubbleRadius) }
                 ?? ChatBox(frame: layout.pictures.reduce(CGRect.null) { $0.union($1) })
             let flight = ChatRowFlight(bubble: shape, text: layout.text, status: layout.delivery, media: !pictures.isEmpty)
             let selection = layout.bubble.flatMap { bubble in
                 selectable.isEmpty ? nil : ChatSelectable(texts: selectable, whole: text, frame: bubble, card: false)
             }
-            return ChatRowPlan(id: item.id, size: layout.size, items: items, hits: hits, accessibilityLabel: label, toggles: layout.foldControl == nil ? nil : toggles, flight: flight, selection: selection)
+            return ChatRowPlan(id: item.id, size: layout.size, items: items, hits: hits, accessibilityLabel: label, toggles: layout.foldControl == nil ? nil : toggles, flight: flight, mine: true, selection: selection)
         case .collaborator, .failure, .tool, .turnEnd, .trace, .question:
             // Planned above.
             return ChatRowPlan(id: item.id, size: CGSize(width: width, height: 0), items: [])
@@ -289,30 +330,47 @@ actor ChatPlanner {
     /// pictures, recordings, files and artifacts where they were presented.
     static func body(_ item: ChatItem, key: Key, syntax: CodeSyntaxService, proposals: [String: ProposalShown], revealable: Bool = false, layout: ([MessageLayout.Part]) -> MessageLayout) -> ChatRowPlan {
         let environment = key.environment
-        let text = HappyReferences.plain(item.text, view: key.references.view)
+        let text = HappyReferences.plain(item.text, instanceId: key.references.instanceId, view: key.references.view)
         var parts: [MessageLayout.Part] = []
         enum Draft {
             case markdown(MarkdownPiece)
             case gallery([Media])
+            /// A `media` component's items and their labels' one lines.
+            case mediaRows([Media], labels: [MeasuredText?])
             case tree(ChatMediaPlan.Tree)
             case card(ChatMediaPlan.Card)
             case page(InlinePage)
             case proposal(String)
             /// Words the planner writes, read but not selectable.
             case line(MarkdownPiece)
+            case ui(ChatUiPlan.Draft)
         }
         var drafts: [Draft] = []
         var spoken: [String] = text.isEmpty ? [] : [text]
         for piece in item.pieces {
             switch piece {
             case .text(let text):
-                let resolved = HappyReferences.markdown(text, view: key.references.view)
-                let markdown = MarkdownPiece(Markdown.joiningSoftBreaks(resolved), color: Palette.text, diagrams: ChatMermaidHeights(row: item.id), syntax: syntax, in: environment, body: ChatTextStyles.text, header: ChatTextStyles.header)
+                let resolved = HappyReferences.markdown(text, instanceId: key.references.instanceId, files: key.references.opens, view: key.references.view)
+                let server = key.server
+                let references = key.references
+                let markdown = MarkdownPiece(
+                    Markdown.joiningSoftBreaks(resolved), color: Palette.text, diagrams: ChatMermaidHeights(row: item.id), syntax: syntax, in: environment,
+                    body: ChatTextStyles.text, header: ChatTextStyles.header, opens: { ChatLinks.opens($0, server: server) && (ChatLinks.file($0).map(references.opens) ?? true) }
+                )
                 drafts.append(.markdown(markdown))
                 parts.append(.markdown(markdown.blocks))
             case .gallery(let media, let columns):
                 drafts.append(.gallery(media))
                 parts.append(.media(media.map(Self.layoutItem), columns: columns))
+            case .mediaRows(let media, let labels):
+                let measured = labels.map { label in
+                    label.map { MeasuredText(ChatUiPlan.detail.string($0, color: Palette.textSecondary, lineBreakMode: .byTruncatingTail, in: environment), maxLines: 1) }
+                }
+                drafts.append(.mediaRows(media, labels: measured))
+                parts.append(.mediaRows(zip(media, labels).map { one, label in
+                    MediaRows.Item(width: one.item.width.map { CGFloat($0) }, height: one.item.height.map { CGFloat($0) }, isVideo: one.isVideo, labelled: label != nil)
+                }))
+                spoken += labels.compactMap { $0 }
             case .tree(let media, let tree):
                 let planned = ChatMediaPlan.tree(media, tree, environment: environment)
                 drafts.append(.tree(planned))
@@ -342,6 +400,16 @@ actor ChatPlanner {
                     parts.append(.markdown(markdown.blocks))
                     spoken.append(line)
                 }
+            case .ui(let shown):
+                let draft = ChatUiPlan.draft(shown, granted: key.uiGranted, environment: environment)
+                drafts.append(.ui(draft))
+                parts.append(.ui(draft.input))
+                if !draft.spoken.isEmpty { spoken.append(draft.spoken) }
+            case .quickReplies(let replies):
+                let draft = ChatUiPlan.draft(replies, environment: environment)
+                drafts.append(.ui(draft))
+                parts.append(.ui(draft.input))
+                if !draft.spoken.isEmpty { spoken.append(draft.spoken) }
             case .picture, .sentFile:
                 break
             }
@@ -349,10 +417,11 @@ actor ChatPlanner {
         let layout = layout(parts)
         var items: [ChatDrawItem] = []
         var hits: [ChatHit] = []
+        var controls: [ChatControl] = []
         var selectable: [ChatSelectable.Text] = []
         var proposals: [(artifactId: String, layout: SidebarProposalLayout, frame: CGRect)] = []
-        func media(_ media: Media, _ frame: CGRect) {
-            items.append(.media(ChatMedia(key: media.key, isVideo: media.isVideo, thumbhash: media.item.thumbhash, label: Strings.media(isVideo: media.isVideo, name: media.item.name)), frame: frame))
+        func media(_ media: Media, _ frame: CGRect, covers: Bool = false) {
+            items.append(.media(ChatMedia(key: media.key, isVideo: media.isVideo, thumbhash: media.item.thumbhash, label: Strings.media(isVideo: media.isVideo, name: media.item.name), covers: covers), frame: frame))
             hits.insert(ChatHit(frame: frame, action: .openMedia(media.key)), at: 0)
             // Telegram's ring pauses or resumes the download; a video's
             // play button plays, so its badge does that instead.
@@ -377,6 +446,12 @@ actor ChatPlanner {
                 selectable += drawn.texts
             case (.media(let frames), .gallery(let gallery)):
                 for (one, frame) in zip(gallery, frames) { media(one, frame) }
+            case (.mediaRows(let rows, let origin), .mediaRows(let shown, let labels)):
+                for ((one, tile), label) in zip(zip(shown, rows.tiles), labels) {
+                    let frame = tile.frame.offsetBy(dx: origin.x, dy: origin.y)
+                    if one.isVisual { media(one, frame, covers: true) } else { card(ChatMediaPlan.card(file: one), frame) }
+                    if let label, let frame = tile.label?.offsetBy(dx: origin.x, dy: origin.y) { items.append(.text(label.layout(for: frame), frame)) }
+                }
             case (.tree(let tree, let origin), .tree(let planned)):
                 for (index, frame) in tree.items.sorted(by: { $0.key < $1.key }) where planned.media.indices.contains(index) {
                     let one = planned.media[index]
@@ -396,6 +471,11 @@ actor ChatPlanner {
                 items += markdown.draw(placed, origin: origin).items
             case (.proposal(let layout, let frame), .proposal(let artifactId)):
                 proposals.append((artifactId, layout, frame))
+            case (.ui(let placed, let origin), .ui(let draft)):
+                let drawn = ChatUiPlan.draw(draft, placed, origin: origin)
+                items += drawn.items
+                hits.insert(contentsOf: drawn.hits, at: 0)
+                controls += drawn.controls
             default:
                 break
             }
@@ -403,7 +483,7 @@ actor ChatPlanner {
         // Each picture and recording reads as itself (`ChatMediaView`).
         return ChatRowPlan(
             id: item.id, size: layout.size, items: items, hits: hits, accessibilityLabel: spoken.joined(separator: "\n\n"), proposals: proposals,
-            revealable: revealable, selection: .covering(items, texts: selectable, whole: text)
+            revealable: revealable, selection: .covering(items, texts: selectable, whole: text), controls: controls
         )
     }
 
@@ -443,7 +523,7 @@ actor ChatPlanner {
         }
         var pieces: [MarkdownPiece] = [piece("**\(Strings.failure)**", Palette.statusError), piece(failure.reason, Palette.text, selectable: true)]
         pieces += failure.steps.map { piece($0, Palette.textSecondary) }
-        let action = Self.action(failure, target: key.switchTarget)
+        let action = key.actionable ? Self.action(failure, target: key.switchTarget) : nil
         let actionText: String? = switch action {
         case .retry?: Strings.retry
         case .switchTo(let target)?: Strings.switchAndContinue(target.label)
@@ -489,14 +569,14 @@ actor ChatPlanner {
         default: name
         }
         // Desktop names a bare ID in the line by its agent's title.
-        let line = explanation.map { HappyReferences.plain($0, view: key.references.view).replacingOccurrences(of: agentId, with: name) }
+        let line = explanation.map { HappyReferences.plain($0, instanceId: key.references.instanceId, view: key.references.view).replacingOccurrences(of: agentId, with: name) }
             ?? Strings.agentMessageFrom(name)
         let body = item.text
         let opens = !body.isEmpty
         let verbText = verb.map { ChatTextStyles.activityVerb.string($0, color: Palette.textSecondary, lineBreakMode: .byTruncatingTail, in: environment) }
         let lineText = ChatTextStyles.activityText.string(line, color: Palette.text, lineBreakMode: .byTruncatingTail, in: environment)
         let markdown = opened && opens ? MarkdownPiece(
-            Markdown.joiningSoftBreaks(HappyReferences.markdown(body, view: key.references.view)), color: Palette.textSecondary,
+            Markdown.joiningSoftBreaks(HappyReferences.markdown(body, instanceId: key.references.instanceId, files: key.references.opens, view: key.references.view)), color: Palette.textSecondary,
             diagrams: ChatMermaidHeights(row: item.id), syntax: syntax, in: environment,
             body: ChatTextStyles.activityBody, header: ChatTextStyles.activityHeader
         ) : nil
@@ -520,7 +600,7 @@ actor ChatPlanner {
         }
         // The whole line opens and closes it, a finger's room above and below.
         if opens { hits.insert(ChatHit(frame: layout.header.insetBy(dx: 0, dy: -AgentMessageLayout.Metrics.paddingV), action: .toggleTool(item.id)), at: 0) }
-        let spoken = [verb, line].compactMap { $0 }.joined(separator: " ") + (opened && opens ? "\n\n" + HappyReferences.plain(body, view: key.references.view) : "")
+        let spoken = [verb, line].compactMap { $0 }.joined(separator: " ") + (opened && opens ? "\n\n" + HappyReferences.plain(body, instanceId: key.references.instanceId, view: key.references.view) : "")
         return ChatRowPlan(id: item.id, size: layout.size, items: items, hits: hits, accessibilityLabel: spoken)
     }
 

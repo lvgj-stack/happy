@@ -3,6 +3,10 @@ package com.slopus.happy.payments
 import android.app.Activity
 import android.content.SharedPreferences
 import com.slopus.happy.BuildConfig
+import com.slopus.happy.analytics.Analytics
+import com.slopus.happy.analytics.AnalyticsEvent
+import com.slopus.happy.analytics.PaywallStep
+import com.slopus.happy.analytics.PurchaseProduct
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,7 +87,7 @@ enum class OfferResult {
     /** `pro` came while it was up: bought or restored. */
     Pro,
 
-    /** Closed by its ✕, back, a swipe or an account change, or another sheet was already up: nothing more. */
+    /** Closed by its ✕, back or a swipe, or another sheet was already up: nothing more. */
     Dismissed,
 }
 
@@ -153,6 +157,9 @@ class Offers(
         .stateIn(scope, SharingStarted.Eagerly, subscription.offer.value)
     val offer: Offer get() = offers.value
 
+    /** What a subscriber pays a month, as the store words it, where that is known ([Subscription.subscribedPrice]). */
+    val subscribedPrice: StateFlow<String?> = subscription.subscribedPrice
+
     /** The store holds a subscription RevenueCat hasn't confirmed yet. */
     val unconfirmed: StateFlow<Boolean> = subscription.problem.map { it == Subscription.Problem.Unconfirmed }
         .stateIn(scope, SharingStarted.Eagerly, false)
@@ -177,6 +184,8 @@ class Offers(
                 mutableSheet.value = sheet
             }
         }
+        // A sheet with the subscription for sale on it; Android sells that one product.
+        if (sheet.offer is Offer.OnSale) Analytics.record(AnalyticsEvent.Paywall(PaywallStep.Presented, PurchaseProduct.Pro))
         try {
             return waiting.await()
         } finally {

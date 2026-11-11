@@ -30,7 +30,8 @@ Preserve credential and push compatibility on upgrades.
   `vendor/elevenlabs` fixes audio focus, teardown and call-local mute.
 - **An agent connection's voice call** (`call/`, `ui/call/`), iOS's
   `HappyCore/Call` ported: apart from the relay's voice above, its own new
-  hosted ElevenLabs agent and four client tools (`CallTool`), no permission
+  hosted ElevenLabs agent, its system prompt sent from the phone
+  (`CallPrompt`) and v3's four client tools (`CallTool`), no permission
   or question tool, hearing only new words and stopping errors from the last
   four conversations visited. Home's three-bar button sits immediately left of compose
   (`ComposeFab(onVoice)`); the call's bar (`CallFrame`, after Telegram-iOS's
@@ -41,9 +42,9 @@ Preserve credential and push compatibility on upgrades.
   It ends when the app leaves the foreground, another account opens or the
   relay's voice starts. For launch it connects to a public agent by its ID
   (`PublicAgentCallGrants`), a connection mechanism and not authentication;
-  the ID comes from `HAPPY_CALL_AGENT_ID`, `-Phappy.callAgentId` or the
-  ignored `local.properties` into `BuildConfig.CALL_AGENT_ID`, and is never
-  committed. Without it the tap says "Voice isn't set up for this
+  the ID comes from `HAPPY_CALL_AGENT_V3_ID`, `-Phappy.callAgentV3Id` or the
+  ignored `local.properties` (`happy.callAgentV3Id`) into
+  `BuildConfig.CALL_AGENT_ID`, and is never committed. Without it the tap says "Voice isn't set up for this
   connection yet". Each device gets 20 free connected minutes in any
   rolling 30 days, 5 hours a month with the subscription (`CallAllowance`,
   local). The app's own sheet (`CallSheet`, no vendor UI) is the welcome,
@@ -52,7 +53,7 @@ Preserve credential and push compatibility on upgrades.
   what the store and RevenueCat say is on sale (`Offer.OnSale`), never a
   made-up price (`Preview` is a debug-only test screen). A `ModalBottomSheet` calls
   `SheetStatusIcons()` so the bar under its scrim keeps light icons.
-  `openSession` replaces a conversation on top and goes over anything else
+  `navigate` to a conversation replaces one on top and goes over anything else
   (`openConversationInPlace`). See
   `docs/agent-voice-call.md` at the repository root. The `happy.call.*`
   intent extras (`CallFixtures`), `CallProbe` and `CallLiveDeviceCheck`
@@ -376,23 +377,57 @@ win:
   `openAgentSettingsRow` opens the agent's Settings or Appearance page with
   `reveal`, or Chief of Staff with the ask for name and avatar.
 - **Agent home search** looks and moves as iOS's
-  (`HappyCore/Agents/Search.swift`, `ui/connection/AgentSearch.kt`) and
-  finds what desktop's ⌘K palette does (`commandPaletteResults.ts`,
-  28342477): the results fade in over home (200 ms ease-out) on its own
-  ground, drawn as home is, and home never moves under them. Nothing typed
-  shows the eight bots and tasks last active (`AgentSearch.recent`); a
-  query shows home's rows that answer it with what they nest under
-  (`AgentSearch.rows`), one card, then Documents, Todos (lists, and the
-  open todos of joined lists whose read the phone kept), Artifacts (the
-  kept catalog page) and Shared (calendars, monitors, chats), every
-  Surface in the catalog joined or not but none home's rows already show
-  (`AgentSearchSources`, read only while search is open), then quick
-  actions and settings: each under its heading, at most six, or "Nothing
-  found" in a capsule. Desktop's ranking (`AgentSearch.rank`): several
-  words in any order, a kind's name three below any title match, joined
-  before not joined; sections keep that order rather than desktop's
-  best-answer one. What a result opens leaves the search for coming back;
-  new work, Cancel or back, and a pull down from the results' top end it.
+  (`HappyCore/Agents/Search.swift`, `SearchShown.swift`,
+  `ui/connection/AgentSearch.kt`) and lists what desktop's ⌘K palette
+  lists (happy-desktop `commandPaletteResults.ts`): the results fade in
+  over home (200 ms ease-out) on its own ground, and home never moves under
+  them. Nothing typed shows the eight bots and tasks last active
+  (`AgentSearch.recent`). A query is the node's one search (happy-agent
+  API.md, "Search"): one flat card of at most 12 things found
+  (`FOUND_LIMIT`), the phone's half fused with the daemon's, and quick
+  actions and settings (local only), each under its heading, at most six,
+  or "Nothing found" in a capsule. Each section stands where its best
+  answer puts it, as desktop's do; what was found comes first once the
+  daemon has answered with anything. It is the only search over vaults; a
+  vault has none of its own.
+  - The phone's half (`localSearch`), at keystroke speed, from what it
+    holds: home's conversations (`agent:`), the catalog's documents
+    (`document:`) and other Surfaces (`surface:`), joined or not
+    (`AgentSearchSources`, read only while search is open), the open todos
+    kept (`todo:`), the kept artifact page (`artifact:`), and home's own
+    pages (`home:`, phone only). Each kind is ranked by desktop's
+    `AgentSearch.rank` (words in any order, a kind's name three below a
+    title match, joined before not), then the kinds fused as the daemon
+    fuses its providers: by place, then provider order; its best 12 go to
+    the fusion.
+  - The daemon's half: `POST /v0/search` with `{q, limit: 20}` and no
+    `types`, as desktop asks (`search/Search.kt`), 120 ms after the typing
+    rests, cancelled by the next keystroke, only where health says
+    `capabilities.search`; offline or older, the phone's alone.
+    `SearchFusion` is the shared RRF (k = 60) over `key`, the client
+    package's vectors in `test/resources/search/` (from happy-agent
+    c67719baf, client 0.0.158). A daemon's answer joins only the query it
+    was for. What the phone has nowhere to open is left out before the
+    fusion, as desktop's `remoteRow` leaves out what it can't open:
+    projects and worktrees (they open nothing on the phone, as their home
+    headings don't), anything archived, a conversation or message in no
+    workspace, and skills, which don't parse. People (`type: "user"`, only
+    `userId` and `name`) stand apart under People, after what was found, at
+    most six in the daemon's order, and only on a Happy Cloud server
+    (`AgentHomeActions.onOpenPerson`); each wears their face from the team
+    directory (`TeamDirectory`, `GET /v0/users?ids=`, never a profile read
+    per row) and opens their profile.
+  - Every found row is a title and desktop's meta under it (66 high): a
+    conversation's kind (Bot, Task, Subtask) or, for a project's chat, its
+    project and worktree; a Surface's kind; an artifact's type; a todo's
+    list, "Done" first when done; a vault item's vault and path; an
+    event's calendar and day; a message is its words, under its
+    conversation, "Agent" when an agent wrote it, and its day. A content
+    match's words take that line, on the phone's row too when both found
+    it. The phone's own rows wear home's marks and open as home opens
+    them; home's own pages draw as home draws them.
+  What a result opens leaves the search for coming back; new work, Cancel
+  or back, and a pull down from the results' top end it.
   The Happy CLI home has no search, as on iOS.
 - **Bot invitations** (happy-ios HappyGuest, docs/APP-CLIP.md; `guest/`,
   `ui/guest/`): `https://app.happy.engineering/bot/invite/<token>` opens a
@@ -418,6 +453,8 @@ win:
 crypto/   pure Kotlin/JVM, no Android: every primitive and key derivation of
           happy-app's encryption, byte for byte. BouncyCastle low-level
           classes (no JCA provider), so it behaves the same on every device.
+analytics/ product analytics, its own Android library behind the `Analytics`
+          facade (see "Analytics"); knows none of the app's types.
 app/
   auth/     account auth (POST /v1/auth), credentials in expo-secure-store's format
   config/   server URL (survives logout), device-only settings (theme)
@@ -815,6 +852,7 @@ cd packages/happy-android
 ./gradlew assembleDebug            # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew testDebugUnitTest        # app unit + Robolectric layout tests
 ./gradlew :crypto:test             # crypto, incl. vectors from happy-app's TS
+./gradlew :analytics:testDebugUnitTest  # analytics, incl. the shared catalog's contract
 ```
 
 Build types map to happy-app's variants and application ids: `debug` →
@@ -845,8 +883,27 @@ ANDROID_SERIAL=<device> ./gradlew :benchmark:connectedBenchmarkBenchAndroidTest 
 
 ### Versions and signing
 
-- `versionName` is owned by `app/build.gradle.kts`. `HAPPY_VERSION_NAME` or
-  `-Phappy.versionName` overrides it.
+- `versionName` is CalVer `YYYY.M.C`: the UTC year, the month without a
+  leading zero, and a counter that starts at 1 each month (`2026.11.1`).
+  Every variant carries the same one, and every build of it differs only
+  by its versionCode. The checked-in default (`defaultVersionName` in
+  `app/build.gradle.kts`) is the upcoming release. `C` moves only when a
+  version is released publicly (a Play production rollout); uploads to a
+  test track, production builds included, don't move it. The next version
+  is the highest `C` this UTC month's release tags carry, plus one, else 1,
+  and a month without a release restamps it to the new month.
+- The build released publicly is tagged
+  `native-android-<versionName>-build<versionCode>` when its rollout
+  starts, never at upload; Android counts on its own, and tags of other
+  schemes (`2.0.0`) don't count. Uploads get no tag; their upload record
+  goes in the release report.
+- `node scripts/native-version.cjs next android` prints the upcoming
+  version from the tags; `check android` fails unless the default is it;
+  `set android` writes it. Before any store build run `check android`, and
+  if it fails, `set android`, commit and land that on `main` first.
+- `HAPPY_VERSION_NAME` or `-Phappy.versionName` overrides the default. A
+  signed release or preview build whose versionName isn't CalVer fails in
+  `pre<Variant>Build`.
 - `versionCode` is EAS's remote, auto-incremented build number
   (`eas.json` `appVersionSource: remote`). There is no counter in the repo:
   a store build passes the next number as `HAPPY_VERSION_CODE` or
@@ -857,20 +914,31 @@ ANDROID_SERIAL=<device> ./gradlew :benchmark:connectedBenchmarkBenchAndroidTest 
   (`keystore.properties.example` lists the keys). Without them `release`
   builds unsigned and `preview` debug-signed, so `assembleRelease` works
   anywhere, CI included.
+- Every `release` and `preview` build, signed or not, needs the voice agent:
+  `HAPPY_CALL_AGENT_V3_ID` (or `-Phappy.callAgentV3Id`, or `happy.callAgentV3Id`
+  in `local.properties`), an ElevenLabs `agent_…` ID. Without it the build
+  fails in `pre<Variant>Build` rather than ship a voice button that only says
+  voice isn't set up. v2's old `HAPPY_CALL_AGENT_ID` is ignored. A build that
+  ships nowhere (CI, a local `assembleRelease` to check R8) sets
+  `HAPPY_RELEASE_WITHOUT_CALL_AGENT=1` instead. Debug, bench and tests never
+  need it.
 - PostHog's public project key comes from `EXPO_PUBLIC_POSTHOG_API_KEY` or
   `-Phappy.postHogKey`, as happy-app's and Happy Desktop's do; nothing is
-  checked in. A build without it reads every feature flag as off. Only flags
-  are read with it (`config/FeatureFlags.kt`): one `POST /flags/?v=2` per
-  open Happy account with its `anonId` as the distinct id (happy-app's
-  `identify`), each foreground, skipped when the account opted out of
-  analytics. The answer is kept per account in `feature-flags` prefs; a failed
-  ask keeps the last one. Nothing is captured.
+  checked in. A build without it reads every feature flag as off and sends
+  no events. Flags (`config/FeatureFlags.kt`): asked by the `:analytics`
+  module alone, `POST /flags/?v=2` with the install id as the distinct id,
+  each foreground, only from a build that sends analytics to PostHog and
+  only while analytics may go; the answer is held in memory, and a failed
+  ask keeps the last one. Events: see "Analytics".
 - A signed release or preview build without an explicit versionCode fails in
   `pre<Variant>Build`, before R8, rather than at the Play console.
 - Shipping goes through the `release` skill like every other release.
+- Release and preview bundles request native debug symbols at `FULL`; inspect
+  their `BUNDLE-METADATA` before upload and follow the release skill's "Debug symbols" rules.
 - CI: `.github/workflows/happy-android.yml` runs `assembleDebug
   assembleRelease testDebugUnitTest :crypto:test` on changes under
-  `packages/happy-android/` and shared mobile resources. It has no signing secrets.
+  `packages/happy-android/` and shared mobile resources. It has no signing
+  secrets and no voice agent (`HAPPY_RELEASE_WITHOUT_CALL_AGENT=1`).
 
 The JDK toolchain (21) is provisioned by the foojay resolver if the machine
 only has a JRE. In the agent sandbox Gradle needs network and local sockets:
@@ -882,6 +950,90 @@ vectors (`app/src/test/resources/happy-ts-send-vectors.json`) are preserved
 compatibility baselines captured from the former client. Their React Native
 generators are retired. Historical source inputs remain in Git; protocol
 changes must explicitly update these baselines against current producers.
+
+## Analytics
+
+The `:analytics` module (`analytics/`) sends the events
+`docs/analytics-catalog.json` lists for Android (the contract shared with
+Happy Desktop and happy-ios; never edit the copy, ask for a change to the
+shared one). It knows none of the app's types: the app calls the
+`Analytics` facade (`start` once in `AppGraph`, then `record`, `errorShown`,
+`failureShown`) with the typed events, and maps its own reasons to the
+catalog's sets in `app/…/analytics/` (`AnalyticsReasons`, `ChatAddress`,
+`accountsOptedOut`). Deleting the module, that folder and the call sites
+removes analytics; `docs/product-analytics.md` lists every line.
+
+No PostHog SDK: it would add the device's name, screen and time zone.
+`AnalyticsEvent` is the typed catalog (closed enums only; no text, id, name,
+path or message has a field; a model goes as its `ModelFamily`, never its
+id), `AnalyticsSchema` the send boundary's allowlist, which drops unknown
+events and properties and any event holding a value outside its set;
+`AnalyticsCatalogTest` holds both, and the family rule, to the JSON.
+Versions are numbers only (`AnalyticsSchema.version` cuts a `-`/`+`
+suffix). `AnalyticsClient` adds the common properties and PostHog's own
+(`distinct_id`, a random install id, never an account's; `$insert_id`;
+`$lib`; `$process_person_profile: false`; `$ip: null`;
+`$geoip_disable: true`), keeps events in memory (500, 7 days) and posts
+`/batch/` (`PostHog`, timestamps in whole seconds, no redirect followed,
+an https host or a loopback one only) every 30 s in the foreground and as
+the app goes behind. A failed batch goes again with the same `$insert_id`;
+what a process held when it died is lost.
+
+Nothing on the phone but the install id (and the switch) in `analytics`
+prefs: the queue, `error_shown`'s throttle and the failure cards seen live
+in memory. `Retired` deletes what earlier builds kept
+(`noBackupFilesDir/analytics`, the day counts), and `AppGraph` the old
+per-account `feature-flags` prefs. `app_crashed` reads only the reason,
+importance and the crashed version of the system's last `ApplicationExitInfo`;
+a process leaves its version with the system
+(`setProcessStateSummary`) only while analytics is on, so a run with
+analytics off is never reported, and the trace is never read.
+
+Fewer events and more privacy: an event is only what no other event
+answers. Nothing is counted on the phone, and no screen, view, navigation,
+picker change, stop, approval or todo is sent; model and effort ride on
+`message_sent`. Each event goes once its step worked (or failed, for the
+`*_failed`/`_error` ones). The "fires" rules are `AnalyticsRules.kt`:
+`error_shown`'s throttle, `chat_failure_shown`'s fresh-and-unseen check,
+`agent_connection_lost`'s incidents, `app_opened`'s cold and warm opens.
+`message_sent` goes as the person sends (queued only, too), with the mode
+then, and never again on a retry; a create that fails is only its
+`task_created`/`bot_created`, not also the send's `error_shown`. A failure
+card's `chat_failure_shown` and a failed Happy CLI send's `error_shown`
+(`Analytics.errorSeen`, with the `SendFailure` its row carries, once per
+row and opt-in) go once the card or row is seen (`Modifier.onSeen`: half on screen, the page
+resumed, no overlay up, as a `PageDialog` leaves the page resumed). A call
+is reported only if analytics was on from its start to its end
+(`Analytics.span`).
+
+Only release and preview builds with a key send, never debug, bench, a test
+harness, an instrumented run or Robolectric (`AnalyticsTarget`). Consent is
+this phone's switch (Data and Storage › Analytics, `AnalyticsSwitch`; a
+stored value that can't be read is off) and every Happy account signed in
+here allowing it (`accountsOptedOut`: the open account's setting as it is
+now, the others from their own databases; settings that can't be read, or
+an `analyticsOptOut` that isn't a boolean, are opted out, a missing one is
+not). Nothing is recorded until both are read. Analytics is on in one
+generation at a time: either switch turned off calls `Analytics.revoke()`
+at once, outside every flow, which ends the generation, cancels the
+requests on their way, and deletes the queue, the throttle, the cards seen,
+the crash mark, the flags and the install id on the client's lane without
+waiting for them. Every record, error, exposure, incident, open, flag
+answer and send checks the generation it was made in, and consent as it
+is then. It stays off until the setting reads as off or is turned back on
+(`Analytics.allow()`); on again starts a new install id. While the old
+install id can't be deleted, analytics stays off and `allow()` refuses
+either switch going back on, which then isn't written down, so a restart
+can't bring that id back. PostHog's `/flags` is asked only by the module, with the install id,
+under the same consent; `FeatureFlags` holds the answer in memory for the
+migration card. If either switch can't be written down, its screen says
+so. Each account's switch on the Account screen toggles from its switch
+only, not its title, like the app's other switch rows.
+
+To see the payloads, a debug build sends to a local endpoint only:
+`adb reverse tcp:8787 tcp:8787` to a listener, then
+`adb shell setprop debug.happy.analytics_host http://127.0.0.1:8787` and a
+cold start.
 
 ## Onboarding and connect
 
@@ -1000,6 +1152,103 @@ change its wire behaviour on Android alone.
   the code's (`ServerSignInFlow.verify`; a new member's health behind the
   profile gate is checked after the name); a mismatch, or none, drops the
   credential and reads "This code doesn't match the server it points to."
+- **Happy Cloud, the one exception** (accounts contract v1;
+  `connection/HappyCloud.kt`, `connection/CloudAccount.kt`,
+  `ui/connection/CloudConnect.kt`, `CloudScreens.kt`): the accounts service
+  is its own origin, `BuildConfig.HAPPY_CLOUD_ACCOUNTS`
+  (`https://auth.happy.engineering`; `HAPPY_CLOUD_ACCOUNTS` or
+  `-Phappy.cloudAccounts` points a build elsewhere), and servers live under
+  one domain, `BuildConfig.HAPPY_CLOUD_BASE` (`happy-clusters.com`; `HAPPY_CLOUD_BASE` or
+  `-Phappy.cloudBase`): the server named `acme` is `https://acme.BASE`.
+  Only `debug` and `preview` builds offer it (`HappyCloud.offeredIn`, by
+  `BuildConfig.BUILD_TYPE`); `release` and `bench` have no way in at all.
+  The account menu's last row, a + reading "Connect to Happy Cloud" (with no
+  account yet, the first screen's ⋮ and Add's scanner ⋮, `ScannerWay.Cloud`),
+  opens a full-screen welcome (no dialog); its Connect opens the
+  **account** sign-in in a Custom Tab: PKCE against the accounts origin's
+  `/authorize` and `/token`, `client_id` `happy`, `resource` the accounts
+  origin, nothing discovered (the page offers Apple for now). The account
+  token is a pass of about an hour with no refresh (token lifetimes v4): held
+  in memory only, never stored, never refreshed, and only ever sent to the
+  accounts API. Past its hour (two minutes' margin), or on any 401 from the
+  accounts API, the account is signed out with nothing retried, and the +
+  opens on the welcome saying the hour is up (`CloudAccountState.SignedOut`
+  `expired`). Signed in, the + skips the welcome and shows the picker: "Your servers" (`GET /v1/servers`, the ones on
+  the phone checked; each titled by its `displayName` over `@name`, with its
+  picture: the ThumbHash painted first, then the bytes from its `url`, which
+  `CloudAccount.image` fetches with the account token only from the accounts
+  origin; no picture, the generated avatar its connection will have), "Create a new server" (a name typed after an `@`,
+  checked with `GET /v1/servers/availability` as the person pauses, then
+  `POST /v1/servers`) and "Join a server" (name and invite code, `POST
+  /v1/servers/join`). Picking, creating or joining one signs in to it with no
+  browser: `POST /v1/servers/:id/token` with the account token
+  (`CloudAccount.serverToken`, `ServerSignInFlow.startWith`) gives the server's
+  access and refresh tokens, its `aud` checked as any; then as the sign-in
+  below (checked with the server, a name if new, kept). That server token is
+  the long-lived session: refreshed at the accounts origin's `/token` with the
+  `refresh_token` grant, `resource` the server, and no account token, so a
+  server stays signed in long after the account's hour. Signing in
+  again on a cloud server does the same while the account is signed in; signed
+  out of it, the server's own browser sign-in opens by itself. Each server is its own connection; one already here
+  just opens. The addresses are the app's own, never typed or pasted, so no
+  code and no `instanceId` check them.
+  Every Happy Cloud screen (welcome, Your servers, Create, Join, and the
+  server sign-in, which reads "Connecting to @name…") is full screen on the
+  first screen's Grain Gradient (`StartSpec` palettes, onboarding's 28/34
+  title, a scene above it) with one primary action at the bottom
+  (`CloudScreens.kt`, `CloudFrame`); servers are cards on it.
+  Sign-in methods are the accounts page's (Apple and GitHub now); the app
+  shows none of its own, but one hidden: the welcome's sparkles pressed ten
+  times within four seconds (`CloudWelcome`) reveal a test account's login
+  and password, for people and agents testing without Apple or GitHub.
+  Nothing of it is composed before then. It posts `POST /v1/auth/password`
+  (`CloudAccount.signInWithPassword`) for the same hour's pass, then goes on
+  as after the browser; a wrong login or password, or a lockout, shows under
+  the fields. The password stays in that composition only: never saved with
+  the screen, stored or logged. Test accounts exist only when an operator
+  creates one. Your servers' ⋮ has "Sign out of Happy Cloud", which
+  forgets the pass; servers on the phone stay signed in. Removing a cloud
+  server (`removeAgentConnection`) first revokes its session at the accounts
+  service (`POST /revoke`, its refresh token and `client_id`, no account
+  token; `CloudAccount.revoke`, best effort, not waited on). A cloud server's
+  Settings has Members (`CloudMembers.kt`, `agent/AgentMembers.kt`). Since
+  the roles cutover the team is the server's (members contract): `GET
+  /v0/members` with each role's name from `GET /v0/roles` (a built-in one in
+  the app's words where roles can't be read), read again on every connect,
+  `member.*`, `role.*` and `profile.updated`, since a member's name is
+  their profile's (there is no `member.added`); Leave server is `POST
+  /v0/members/leave`, confirmed, then the server is removed here too, and
+  its last owner gets `409 last_owner`. No account pass is needed. A
+  member with a `userId` opens their profile (`MemberProfile.kt`,
+  `agent/MemberProfiles.kt`; cluster `GET /v0/users/:id/profile`, Happy
+  Cloud only): the agent page's header and tiles with their picture round,
+  job title and team role, Usage (tasks, active tasks, active days of the
+  last 30, last active), Tokens per window (input plus output, which
+  already hold cache and reasoning, summed over providers and models) and
+  Recent activity, their latest ten tasks, each opening its conversation. The
+  accounts service lists servers without a role now (`CloudServer.role` is
+  optional; the picker shows a role only where one is listed).
+  A cloud server's team roles gate what shows (`agent/AgentPermissions.kt`):
+  `GET /v0/permissions`'s `granted`, read on every connect, `role.*` and
+  `member.updated`
+  event (`AgentSession.permissions`), and nothing granted until it is read
+  or when reading fails; any other server gates nothing. Without
+  `content.write` there is no compose, voice call, todo or document
+  editing, adding or moving calendar events, or vault changes, and a chat
+  says "your role can't send messages" in the composer's place; the Chief
+  of Staff's chat and settings' asks of it need `bots.manage`. A vault
+  Surface's `access` (`none` locks it: its name, and nothing asked;
+  `read` hides every change) and `policyVault` (its `Global` and
+  `Security` folders and their `AGENTS.md` / `SECURITY.md` keep their
+  names and places, `PolicyPlaces`; no retention settings) come with the
+  snapshot, read again on `vault.settings.updated`. A `403 forbidden`
+  reads "You don't have permission to do that." (`Problem.Forbidden`,
+  `IntentRefusal.FORBIDDEN`), never the server's words. Mobile edits no
+  roles or access rules; iOS matches field for field.
+  People read a cloud server's address as `@name`, like a username, until
+  Happy Cloud has its own domain (`HappyCloud.handle`: the picker, create,
+  join, the server sign-in screen, the account menu); the URL is used as
+  before, only not shown. Connection diagnostics keep the real host.
 - **Sign-in** (`connection/ServerSignInFlow.kt`, `ServerAuth.kt`): `GET
   /v0/authentication` lists the methods, then OAuth authorization code + PKCE
   S256 in a Custom Tab (never a WebView), with RFC 8707 `resource` on
@@ -1075,6 +1324,23 @@ change its wire behaviour on Android alone.
   connection; `openOutside` never hands a Happy URL to the system. Sharing a
   bundled artifact's page shares its external link, and isn't offered when the
   server has no `instanceId`. Chat doesn't render `happy://` links as links yet.
+- **Settings links and buttons** (API.md "Happy links", `ui/connection/SettingsLinks.kt`):
+  `happy://settings/<page>` is a closed list of pages (`HappyUrls.SETTINGS_PAGES`).
+  The Markdown parser splits a link's title from its destination; a well-formed
+  Happy link titled exactly `button` is lifted out of its paragraph, header or
+  list into a `MarkdownBlock.Buttons` after it, drawn as full-width RoundButtons
+  stacked in order. A malformed or blank-labelled settings link, and a
+  malformed button, are their label as inert text. Pages open as iOS maps them:
+  general → Settings, account → Profile, sharing, voice, servers → Happy Cloud's
+  servers (Settings elsewhere), members → Members on Happy Cloud; every other
+  page opens `https://<name>.HAPPY_CLOUD_WEB/#/settings/<page>` in a Custom Tab
+  on a Happy Cloud server and is inert anywhere else. A conversation's rows
+  are parsed for their connection (`AgentSession.settingsPages`, through
+  `ConversationRowBuilder.hasPage` and `LiveText`): a settings link to a page
+  it lacks is its words, inline, and a button its words in its place. Buttons
+  elsewhere ask `LinkOpener.opens` and show their words when nothing opens.
+  Unlocked `happy://settings…` from outside is still happy-app's path
+  (`DeepLinks`); only the instance form opens a settings link.
 
 ## Push
 
@@ -1149,18 +1415,19 @@ its paywall dialog are gone; their old caches (`purchases` preferences, the
 SDK's own) stay on disk, unread.
 
 - `AppGraph.subscription` (`Subscription`) is the one purchase-state owner:
-  the customer (the relay account's JWT subject, else a persistent anonymous
-  install id; login is never needed), `pro`, what is on sale (`offer`:
+  the customer (the install's own anonymous id, kept on the phone; no Happy
+  account, sign-in or analytics id ever touches it), `pro`, what is on sale (`offer`:
   the current offering's monthly package only), buy, the launch/foreground
   sweep of unfinished purchases and Restore. `pro` comes from the last
   RevenueCat answer (`ProPass`, cached 24 h), never from the offering, and
   honours any product granting `pro` (older annual or lifetime too).
 - A purchase belongs to whoever it was bought for: Play's
-  `obfuscatedAccountId` is SHA-256 of the customer id, kept for good in
-  `accounts`. Only a user's Restore moves one to another customer
-  (`restored`); nothing is posted for whoever happens to be signed in.
-  Signing in identifies an anonymous buyer with the account; RevenueCat does
-  not guarantee that merges.
+  `obfuscatedAccountId` is the customer id itself, so every phone on the
+  Google account reads it. At launch and foreground an active subscription
+  naming a customer makes it the install's (`adopt`, no restore). Only a
+  user's Restore moves one to another customer (`restored`), except the one
+  restore a new version makes of a subscription that names no one
+  (`migrate`, once, only without `pro`).
 - `AppGraph.offers` (`Offers`) is the one offer presenter, drawn by the one
   `OfferHost` in `HappyApp`: voice's welcome and used-up sheets and the relay
   voice's Required sheet (`voice_must_pay`, unreachable while that voice is
@@ -1170,8 +1437,9 @@ SDK's own) stay on disk, unread.
   boba row, which is that page's only Support us): "Pledge <price>/month"
   over Subscribe, always there and greyed out while nothing is on sale,
   then Restore Purchases and Manage subscriptions as quiet links.
-- Grants are client-side. Only the relay's voice has a server gate; its
-  5-hour hard cap is never sold, only said.
+- Grants are client-side. The server checks no subscription; its 5-hour
+  hard cap on every account's voice is a cost safety net, never sold, only
+  said.
 - Debug builds treat About's Support row as Pro, as RN does; that grants no
   voice.
 
@@ -1447,6 +1715,79 @@ secretbox has checked the MAC, and a sent picture is kept at upload, so the
 sender never downloads it. A legacy download is one request with progress
 from the body; it can't pause.
 
+### Chat UI
+
+An agent shows typed components in a conversation and suggests quick
+replies (happy-agent protocol 35). Every request to an agent connection
+says `Happy-Protocol: 35` (`TailcatHttp.requestHead`); without it the
+daemon sends fallback text and leaves attempt records out.
+
+The contract is happy-agent's client package, vendored into
+`app/src/test/resources/ui/` by `tools/chat-ui/vendor.sh <happy-agent
+checkout> <commit>`: `ui.schema.json` (the catalog, secret fields marked
+`x-happy-secret`), `actions.fixtures.json` (its conformance vectors) and
+`vendored.json` (the commit and each file's SHA-256, which
+`UiContractTest` checks). Never edit them by hand; run the script again
+when the catalog changes. Tests read them through `UiContract`. A vector
+section no test reads is not depended on: today `result` (no action this
+build sends has one) and `mediaLayout`'s desktop row height.
+
+- **Wire** (`conversation/ui/UiWire.kt`, `QuickReplies.kt`): a `ui` block
+  of an agent message, the `ui` presentation of a `show_ui` call (its
+  `items` are media items a `media` component names by index), the
+  `action` block of an attempt record, and `quick_replies` as a block or a
+  `suggest_replies` call's presentation. A block that doesn't decode is
+  skipped, never its message. Each is kept on the phone as it came (`raw`).
+- **A component is drawn whole or not at all.** `UiComponent` reads the
+  types this build draws strictly, as their schemas say; any other type, a
+  known one whose props don't fit, and a `media` naming an item its call
+  doesn't have, is its `fallback` line. `provider_sign_in` is a fallback
+  line. Adding a type: its class and strict parse in `UiWire.kt`, its row
+  in `ConversationRowBuilder.uiRows`, its view, and tests of all three
+  against the schema.
+- **Rows.** A component is a `ConversationRow.Ui`; a `media` component is a
+  `ConversationRow.UiMedia`, a row of its own kind rather than a flag on
+  `Media`, because it lays files out among the pictures by the shared rule
+  (`UiMediaLayout`, a port of `layoutMedia` checked against the vectors)
+  and labels each item. What `show_ui` or `suggest_replies` showed stands
+  in its call's place, with no tool line.
+- **A press** is `Conversation.press(offer, action)`: one
+  `POST /v0/agents/:id/actions`, no bubble. `UiPresses` holds how presses
+  stand: one of an offer at a time; the attempt ID kept across the
+  request's retries and, when no answer came, for the same press again;
+  only the action's redacted form while it goes. `UiActions` is the
+  catalog of what this build sends: the fields kept (never one marked
+  secret; an action it doesn't know keeps no payload) and the permission
+  needed, both held to the schema by `UiActionsTest`. Nothing of a payload
+  is logged or stored.
+- **Attempt records** show on their component as `UiWork`, never as a row:
+  busy while a press goes or the newest attempt is pending; a refusal only
+  while it is news (learned while the chat is open, until the offer is
+  pressed again, a later attempt goes through, or the component's live
+  state is read again after it). They live in standalone runs
+  (`Run.standalone`, `kind: "standalone"`), which never change whether
+  the agent is working and draw no end of a turn.
+- **Results.** No action this build sends answers with a result, so
+  `ConversationApi.act` reads none. One that does keeps its result in the
+  conversation, by offer, and publishes it with the row: never in a row's
+  `remember`, which a lazy list drops as it scrolls away.
+- **Live components** draw from the server's state, not their props:
+  `default_model` from `ConversationState.catalog`, read again on
+  `config.updated`.
+- **Views** (`ui/conversation/UiComponentViews.kt`, `UiDefaultModelView.kt`,
+  `UiMediaViews.kt`, `QuickReplyViews.kt`) act through one object,
+  `ConversationRowActions.ui` (`UiRowActions`); where it is null the rows
+  are only read. No link a server sends is opened; if one ever is, only
+  `https`.
+- **Quick replies.** `QuickReplyPlacement` puts each stack under all the
+  agent wrote in its turn before a person's message; `QuickReplyRows.mark`
+  sets the option sent from the message's `quickReply` and lets only the
+  newest stack take a tap, until someone writes. A tap is
+  `Conversation.sendReply`: an ordinary send of the option with
+  `quickReply { messageId, toolCallId?, index }`. The optional `ui` list
+  is ignored.
+- Words are in `strings_chat_ui.xml`.
+
 ### Context meter and usage ring
 
 Under an agent connection's composer, `ui/conversation/ContextMeter` draws
@@ -1638,7 +1979,17 @@ is `packages/happy-ios`. The wire keeps its own names
   existing ones). `HttpsTransport` (an agent with a public URL) has no
   clients: each socket is its own TLS connection tagged with its category,
   so `reset(category)` closes only that category's, with the same
-  deadlines; `AgentEndpointTransport` passes the category on. It uses
+  deadlines; `AgentEndpointTransport` passes the category on. A session
+  kept through the background (`AppGraph.setForeground` →
+  `AgentSessions.backgrounded`) resumes its transport before its link next
+  runs, open then or later (`Transport.resumed`, iOS's): every client is
+  woken (`TailcatClient.wake`), which checks rather than assumes anything
+  broke. The relay is pinged and replaced only if it doesn't answer within
+  two seconds, every direct path is probed and one that stopped answering
+  dropped, and an expired session rekeys; clients, requests under way and
+  live sessions stay. tailcat-kotlin watches no network itself, so a network
+  that returns gets the same check on every kept client
+  (`Transport.networkChanged`, from `AgentSession.networkReturned`). It uses
   tailcat-kotlin's default DERP map (`https://tailcat.dev/derpmap.json`),
   cached in `noBackupFilesDir/tailcat/derpmap.json` (`FileDerpMapCache`):
   with no network and no cached map, connecting fails.
@@ -1682,6 +2033,19 @@ iOS's `docs/browser-proxy.md` is the contract; `browser/` ports it
   pass, so the link's own click, a bubble's copy menu and text selection
   never also fire; a drag past the touch slop lets go and scrolls
   (`LinksTest`, which covers each site).
+- **Live artifacts** (`ArtifactShow.Live`, `ArtifactLoader.livePage`) open
+  the URL of the version shown, a pinned version its own, http or https, with
+  `BrowserProxy.Scope.Live`: every tunnel, to the page's origin or any other
+  host, is `CONNECT /v0/artifacts/:id/proxy` (`BrowserNetwork.artifact`), in
+  the network the artifact was made on, where the daemon checks each
+  destination against its URL (happy-agent API.md, "Live URLs"). No workspace
+  is looked up and nothing falls back to another network. There is no data
+  bridge: the page's `/api/…` is the site's own. Its WebView has a profile of
+  its own (below), as every page does. A refusal of the route itself (404, 501,
+  503) is `BrowserException.Kind.LiveUnavailable` (`browser_proxy_live_unavailable`),
+  shown as "This Page's Computer Isn't Available"; a refusal inside the open
+  tunnel is what it was. Over HTTPS the route is its WebSocket twin, as every
+  tunnel's is (`BrowserTunnel.outer`).
 - **Remote only.** Every WebView request goes through `ProxyController`'s
   override to the loopback `BrowserProxy`, with no bypass rules, applied
   before the first load; a WebView without `PROXY_OVERRIDE` shows
@@ -1710,6 +2074,7 @@ iOS's `docs/browser-proxy.md` is the contract; `browser/` ports it
     sees it. iOS allows them in web content only; Android has no
     WebView-only switch, and a base-config allowance would also open
     cleartext to the app's native clients.
+    A live artifact at plain http off localhost hits the same refusal.
   - The listener binds 127.0.0.1 by address: Android's
     `getLoopbackAddress()` is `::1`, which WebView's `127.0.0.1` rule
     can't reach.
@@ -1783,13 +2148,27 @@ every locale, not happy-i18n.
   version) or Keep both ("name 2.ext"). A file named "*.artifact" (any
   case) becomes an artifact, and a ".zip" is always a plain file. An
   artifact's new version is a whole ".artifact" file. A refused one shows
-  the daemon's own reason on its row. Artifacts keep the ".artifact"
-  suffix in their names (renaming adds it back) and download or share as
-  that `.artifact` file (`/versions/:n/zip`).
+  the daemon's own reason on its row, with no retry. Each task keeps one
+  `operationId` (for `POST /files/:id/versions`) and one new-file `id` on
+  every try, so a lost answer makes no second version or file; a retry after
+  a placement was sent asks it again before sending any bytes (`placedAgain`),
+  and a `200` with `version: null` is success. A Restore version tap keeps its
+  own `operationId` through its `If-Match` retry. Uploads live in memory, so
+  they don't resume after the process dies.
+- **Apps**: people call an artifact an app, in every string. Its stored name
+  keeps the ".artifact" suffix (API calls, and the `.artifact` file a download
+  or share writes from `/versions/:n/zip`), but no screen shows it:
+  `VaultItem.shownName` and `VaultNames.shown`/`shownPath` drop it everywhere
+  a name or path is drawn. An app is told apart by its one icon
+  (`AppsOutline`) and its live preview. Rename edits the name without the
+  suffix and adds it back (`newName`), and a folder or plain file can't be
+  named "*.artifact" (`vaults_name_reserved`, under its own title,
+  `vaults_name_refused`). A share (`vaultShare`) sends the `.artifact` file
+  titled with the bare name (`EXTRA_TITLE` and the `ClipData` label).
 - **Previews** (`VaultPreview.kind`): pictures and video go to
   `PictureViewer`, with video over a `RangedSource`. PDFs go to
   `PdfRenderer`. Text up to 2 MB, and Markdown, go to `FileScreen`.
-  Artifacts run as live sites through `BrowserProxy` with
+  HTML apps run live through `BrowserProxy` with
   `Scope.Artifact(vault = …)`: every path is a file of that version
   (`/versions/:n/artifact/*`), and there is no `/api`. Anything else gets
   share, open in another app, or Save to.
@@ -1833,3 +2212,14 @@ command runs at once and the draft clears) and `draft` (a skill becomes
 `Problem.CommandGone`/`CommandBusy`); a skill is a user message `/name args`
 carrying one `read_skill` tool_call_request, as desktop sends it. The command's
 words never go out as a message otherwise.
+
+A new chat, before it has an agent, offers the computer's global skills in the
+same list (`ConversationApi.skills`: `GET /v0/skills` 100 a page, read again
+from the start on 409, enabled and ready ones only; 404/501 offer none). They
+are read as the new chat starts and again on `skills.updated` or a reconnect.
+A first message that is `/skill args` with an offered name (`Conversation.send`)
+goes as a skill does in a chat: `/name args` asking for `read_skill`, sent as
+the task or bot's first message once it is made. The new agent's catalog (its
+bootstrap) decides: without that name, or with attachments, the words go as
+plain text. A failure leaves the message failed with Retry, as a first send's
+does. Other commands wait for an agent.

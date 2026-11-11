@@ -102,7 +102,6 @@ public actor VaultLibrary {
         var settings: VaultSettings?
         /// The newest policy sent and not yet answered, shown over it.
         var settingsEdit: (token: UUID, retention: VaultRetention)?
-        var changeListeners: [UUID: AsyncStream<Void>.Continuation] = [:]
         var settingsListeners: [UUID: AsyncStream<VaultSettings?>.Continuation] = [:]
         var entryListeners: [String: [UUID: AsyncStream<VaultEntryEvent>.Continuation]] = [:]
         var uploads: [VaultUploadState] = []
@@ -133,6 +132,9 @@ public actor VaultLibrary {
     /// The file each upload makes, named once, so a retry after a lost
     /// answer finds the file it made instead of making another.
     private var placements: [String: (id: String, mutationId: String)] = [:]
+    /// Each new-version upload's operation, kept across its retries so a
+    /// lost answer is replayed rather than made twice.
+    private var operations: [String: String] = [:]
     private var names: [String: String] = [:]
     private var following: Task<Void, Never>?
 
@@ -382,7 +384,6 @@ public actor VaultLibrary {
     /// Publishes every open folder of the vault, and keeps the read ones.
     private func changed(_ surfaceId: String) {
         guard let vault = vaults[surfaceId] else { return }
-        for listener in vault.changeListeners.values { listener.yield() }
         for key in vault.folders.keys {
             publish(surfaceId, folder: key)
             scheduleKeep(surfaceId, folder: key)
@@ -518,8 +519,10 @@ public actor VaultLibrary {
     public func restoreVersion(_ surfaceId: String, _ entryId: String, number: Int) async throws -> VaultVersion? {
         let routes = routes
         let box = VersionBox()
+        // One operation for the person's one restore, whatever it takes to land.
+        let operationId = UUID().uuidString
         try await change(surfaceId, entryId, shown: { $0 }) { ifMatch, mutationId, _ in
-            let answer = try await routes.createVaultVersion(surfaceId, entryId, uploadId: nil, fromVersion: number, ifMatch: ifMatch, mutationId: mutationId)
+            let answer = try await routes.createVaultVersion(surfaceId, entryId, uploadId: nil, fromVersion: number, operationId: operationId, ifMatch: ifMatch, mutationId: mutationId)
             box.set(answer.version)
             return answer.entry
         }
@@ -661,27 +664,6 @@ public actor VaultLibrary {
 
     // MARK: Reads passed through
 
-    /// What matches `query`; its items are held, so they can be changed.
-    public func search(_ surfaceId: String, query: String) async throws -> (results: [VaultSearchResult], truncated: Bool) {
-        let found = try await routes.vaultSearch(surfaceId, query: query)
-        for result in found.results { take(result.entry) }
-        return found
-    }
-
-    /// A signal each time anything in the vault changes here, for what
-    /// isn't a folder's state (a search on screen).
-    public func changes(_ surfaceId: String) -> AsyncStream<Void> {
-        start()
-        if vaults[surfaceId] == nil { vaults[surfaceId] = Vault() }
-        let id = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
-        vaults[surfaceId]?.changeListeners[id] = continuation
-        continuation.onTermination = { [weak self] _ in Task { await self?.unlistenChanges(surfaceId, id) } }
-        return stream
-    }
-
-    private func unlistenChanges(_ surfaceId: String, _ id: UUID) { vaults[surfaceId]?.changeListeners[id] = nil }
-
     /// An entry's surviving versions, newest first, and its activity.
     public func history(_ surfaceId: String, _ entryId: String) async throws -> (versions: [VaultVersion], activity: [VaultActivity]) {
         let routes = routes
@@ -754,6 +736,7 @@ public actor VaultLibrary {
 
     public func cancelUpload(_ surfaceId: String, _ id: String) {
         placements[id] = nil
+        operations[id] = nil
         uploadTasks[id]?.cancel()
         uploadTasks[id] = nil
         vaults[surfaceId]?.uploads.removeAll { $0.id == id }
@@ -778,8 +761,10 @@ public actor VaultLibrary {
             setUpload(surfaceId, id) { $0.phase = .placing; $0.sent = $0.total }
             if let replacing = item.replacing {
                 let routes = routes
+                let operationId = operations[id] ?? UUID().uuidString
+                operations[id] = operationId
                 try await change(surfaceId, replacing, shown: { $0 }) { ifMatch, mutationId, _ in
-                    try await routes.createVaultVersion(surfaceId, replacing, uploadId: upload.id, fromVersion: nil, ifMatch: ifMatch, mutationId: mutationId).entry
+                    try await routes.createVaultVersion(surfaceId, replacing, uploadId: upload.id, fromVersion: nil, operationId: operationId, ifMatch: ifMatch, mutationId: mutationId).entry
                 }
             } else {
                 let placement = placements[id] ?? (TodoID.make(), ClientID.make())
@@ -789,6 +774,7 @@ public actor VaultLibrary {
             }
             staged[id] = nil
             placements[id] = nil
+            operations[id] = nil
             vaults[surfaceId]?.uploads.removeAll { $0.id == id }
             if let file = uploadFiles.removeValue(forKey: id) { try? FileManager.default.removeItem(at: file) }
             changed(surfaceId)

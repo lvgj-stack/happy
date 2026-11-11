@@ -212,10 +212,127 @@ class VaultUploadsTest {
     }
 
     @Test
+    fun aLostVersionAnswerIsAskedAgainAsTheSameOperation() = runBlocking {
+        val daemon = VaultDaemon()
+        val placed = ArrayList<VaultItem>()
+        var used = false
+        var versions = 0
+        daemon.reply = { request ->
+            when {
+                request.method == "POST" && request.path.endsWith("/versions") && ++versions == 1 -> {
+                    // The daemon made the version and used the upload; the answer never came.
+                    used = true
+                    throw IOException("connection reset")
+                }
+                // The repeat is answered with what the first did, here no new version.
+                request.method == "POST" && request.path.endsWith("/versions") ->
+                    200 to """{"file":{"id":"f1","surfaceId":"s1","parentId":null,"name":"a.txt","kind":"file","latestVersion":2,"version":"v6"},"version":null}"""
+                request.method == "GET" && request.path.startsWith("/v0/vault-uploads/") && used -> 404 to """{"error":"Not found","code":"not_found"}"""
+                else -> null
+            }
+        }
+        withTimeout(10_000) {
+            val uploads = VaultUploads(VaultClient(AgentClient(daemon, "t")), this, { placed += it }, retryMs = 0)
+            val id = uploads.replace(vaultItem("f1", "v5", "a.txt"), Bytes("a.txt", bytes(10)))
+            uploads.tasks.first { tasks -> tasks.any { it.status == VaultUploads.Status.Failed } }
+            uploads.retry(id)
+            uploads.tasks.first { it.isEmpty() }
+        }
+        val asked = daemon.requests.filter { it.path.endsWith("/versions") }.map { it.json!!["operationId"]!!.jsonPrimitive.content }
+        assertEquals(2, asked.size)
+        assertTrue(asked[0].isNotEmpty())
+        assertEquals(asked[0], asked[1])
+        // The bytes went once: the repeat needs no upload.
+        assertEquals(1, daemon.requests.count { it.method == "POST" && it.path == "/v0/vault-uploads" })
+        assertEquals(listOf("v6"), placed.map { it.version })
+    }
+
+    @Test
+    fun aLostNewFileAnswerIsAskedAgainWithTheSameId() = runBlocking {
+        val daemon = VaultDaemon()
+        val placed = ArrayList<VaultItem>()
+        var used = false
+        var creates = 0
+        daemon.reply = { request ->
+            when {
+                request.method == "POST" && request.path == "/v0/surfaces/vault/s1/files" && ++creates == 1 -> {
+                    used = true
+                    throw IOException("connection reset")
+                }
+                request.method == "POST" && request.path == "/v0/surfaces/vault/s1/files" -> {
+                    val id = request.json!!["id"]!!.jsonPrimitive.content
+                    201 to """{"file":{"id":"$id","surfaceId":"s1","parentId":null,"name":"b.txt","kind":"file","latestVersion":1,"version":"v1"}}"""
+                }
+                request.method == "GET" && request.path.startsWith("/v0/vault-uploads/") && used -> 404 to """{"error":"Not found","code":"not_found"}"""
+                else -> null
+            }
+        }
+        withTimeout(10_000) {
+            val uploads = VaultUploads(VaultClient(AgentClient(daemon, "t")), this, { placed += it }, retryMs = 0)
+            val id = uploads.add("s1", null, Bytes("b.txt", bytes(10)))
+            uploads.tasks.first { tasks -> tasks.any { it.status == VaultUploads.Status.Failed } }
+            uploads.retry(id)
+            uploads.tasks.first { it.isEmpty() }
+        }
+        val ids = daemon.requests.filter { it.method == "POST" && it.path == "/v0/surfaces/vault/s1/files" }.map { it.json!!["id"]!!.jsonPrimitive.content }
+        assertEquals(2, ids.size)
+        assertEquals(ids[0], ids[1])
+        assertEquals(1, daemon.requests.count { it.method == "POST" && it.path == "/v0/vault-uploads" })
+        assertEquals(listOf(ids[0]), placed.map { it.id })
+    }
+
+    @Test
+    fun anUploadWhoseFirstPlacingNeverArrivedIsSentAgain() = runBlocking {
+        val daemon = VaultDaemon()
+        var versions = 0
+        var gone = false
+        daemon.reply = { request ->
+            when {
+                // Lost on the way there: nothing made, and meanwhile the upload expired.
+                request.method == "POST" && request.path.endsWith("/versions") && ++versions == 1 -> {
+                    gone = true
+                    throw IOException("connection reset")
+                }
+                request.method == "POST" && request.path.endsWith("/versions") && versions == 2 -> 404 to """{"error":"Not found","code":"not_found"}"""
+                request.method == "GET" && request.path == "/v0/vault-uploads/up1" && gone -> 404 to """{"error":"Not found","code":"not_found"}"""
+                else -> null
+            }
+        }
+        withTimeout(10_000) {
+            val uploads = VaultUploads(VaultClient(AgentClient(daemon, "t")), this, {}, retryMs = 0)
+            val id = uploads.replace(vaultItem("f1", "v5", "a.txt"), Bytes("a.txt", bytes(10)))
+            uploads.tasks.first { tasks -> tasks.any { it.status == VaultUploads.Status.Failed } }
+            uploads.retry(id)
+            uploads.tasks.first { it.isEmpty() }
+        }
+        val asked = daemon.requests.filter { it.path.endsWith("/versions") }
+        assertEquals(3, asked.size)
+        assertEquals(1, asked.map { it.json!!["operationId"]!!.jsonPrimitive.content }.toSet().size)
+        assertEquals("up2", asked.last().json!!["uploadId"]!!.jsonPrimitive.content)
+        assertEquals(2, daemon.requests.count { it.method == "POST" && it.path == "/v0/vault-uploads" })
+    }
+
+    @Test
+    fun aRestoreSaysItsOperationAndNothingNewIsStillDone() = runBlocking {
+        val daemon = VaultDaemon()
+        daemon.reply = { request ->
+            if (request.method == "POST" && request.path.endsWith("/versions")) {
+                200 to """{"file":{"id":"f1","surfaceId":"s1","parentId":null,"name":"a.txt","kind":"file","latestVersion":3,"version":"v7"},"version":null}"""
+            } else null
+        }
+        val (file, version) = VaultClient(AgentClient(daemon, "t")).newVersion(vaultItem("f1", "v6", "a.txt"), fromVersion = 1, operationId = "op-1")
+        assertEquals("v7", file.version)
+        assertNull(version)
+        val body = daemon.requests.single().json!!
+        assertEquals("op-1", body["operationId"]!!.jsonPrimitive.content)
+        assertEquals("1", body["fromVersion"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun artifactsAreKnownByTheirSuffixInAnyCase() {
-        assertTrue(VaultUploads.isArtifact("Launch.ARTIFACT"))
-        assertEquals(false, VaultUploads.isArtifact("site.zip"))
-        assertEquals(false, VaultUploads.isArtifact(".artifact"))
+        assertTrue(VaultNames.isArtifact("Launch.ARTIFACT"))
+        assertEquals(false, VaultNames.isArtifact("site.zip"))
+        assertEquals(false, VaultNames.isArtifact(".artifact"))
         assertEquals("launch 2.artifact", VaultUploads.numbered("launch.artifact", 2))
     }
 
@@ -265,7 +382,6 @@ class VaultClientTest {
             200 to when {
                 "/items?" in request.path -> """{"items":[{"id":"e1","surfaceId":"s1","name":"a","kind":"folder","version":"v1"}],"nextPageCursor":"c 2"}"""
                 request.path.endsWith("/files/e1") -> """{"file":{"id":"e1","surfaceId":"s1","name":"a.txt","kind":"file","version":"v1"},"path":"/R/a.txt","ancestors":[{"id":"f1","name":"R"}],"inTrash":true}"""
-                "/search" in request.path -> """{"results":[{"item":{"id":"e1","surfaceId":"s1","name":"a","kind":"file","version":"v1"},"path":"/a","match":"content","snippet":"…a…","line":3}],"truncated":true}"""
                 else -> "{}"
             }
         }
@@ -273,9 +389,6 @@ class VaultClientTest {
         val page = routes.children("s1", "f 1", page = "c 1", sort = VaultSortField.Updated)
         assertEquals("c 2", page.next)
         assertEquals(true, page.items.single().isFolder)
-        val (results, truncated) = routes.search("s1", "a b")
-        assertTrue(truncated)
-        assertEquals(3, results.single().line)
         assertEquals("/v0/surfaces/vault/s1/files/e1/versions/latest/content", routes.contentPath("s1", "e1", null))
         assertEquals("/v0/surfaces/vault/s1/files/e1/versions/2/artifact/a%20b/c.js", routes.artifactFilePath("s1", "e1", 2, "a b/c.js"))
         val location = routes.location("s1", "e1", folder = false)
@@ -284,7 +397,7 @@ class VaultClientTest {
         assertTrue(location.inTrash)
         daemon.requests.removeAt(daemon.requests.lastIndex)
         assertEquals(
-            listOf("/v0/surfaces/vault/s1/items?parentId=f%201&sort=updatedAt&limit=500&pageCursor=c%201", "/v0/surfaces/vault/s1/search?q=a%20b&kind=all&limit=50"),
+            listOf("/v0/surfaces/vault/s1/items?parentId=f%201&sort=updatedAt&limit=500&pageCursor=c%201"),
             daemon.requests.map { it.path },
         )
     }

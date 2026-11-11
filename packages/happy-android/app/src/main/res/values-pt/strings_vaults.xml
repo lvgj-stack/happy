@@ -18,6 +18,7 @@
     <string name="vaults_add_tier">Adicionar etapa</string>
     <string name="vaults_an_agent">Um agente</string>
     <string name="vaults_another_folder">outra pasta</string>
+    <string name="vaults_app">App</string>
     <string name="vaults_bytes_of">%1$s de %2$s</string>
     <string name="vaults_changed_elsewhere">Enquanto isso, foi alterado em outro lugar. Tente novamente.</string>
     <string name="vaults_create">Criar</string>
@@ -45,7 +46,6 @@
     <string name="vaults_keep_both">Manter ambos</string>
     <string name="vaults_kind">Cofre</string>
     <string name="vaults_line">linha %1$d</string>
-    <string name="vaults_markdown_site">Site Markdown</string>
     <string name="vaults_max_age">Remover versões com mais de</string>
     <string name="vaults_max_versions">Manter no máximo</string>
     <string name="vaults_more_actions">Mais ações para %1$s</string>
@@ -54,6 +54,8 @@
     <string name="vaults_move_title">Movendo “%1$s”</string>
     <string name="vaults_move_to_trash">Mover para a lixeira</string>
     <string name="vaults_name">Nome</string>
+    <string name="vaults_name_refused">Não é possível usar este nome</string>
+    <string name="vaults_name_reserved">Os nomes não podem terminar em “.artifact”.</string>
     <string name="vaults_name_taken">Já existe algo chamado “%1$s” nessa pasta.</string>
     <string name="vaults_name_taken_message">Substituir pelo que você está enviando? As versões anteriores ficam no histórico.</string>
     <string name="vaults_name_taken_title">“%1$s” já existe</string>
@@ -92,13 +94,6 @@
     <string name="vaults_restored_from">da versão %1$d</string>
     <string name="vaults_root">a raiz do cofre</string>
     <string name="vaults_save_to_device">Salvar no dispositivo</string>
-    <string name="vaults_search">Buscar</string>
-    <string name="vaults_search_contents">Nos arquivos</string>
-    <string name="vaults_search_hint">Busque nomes e textos neste cofre</string>
-    <string name="vaults_search_more">Há mais resultados do que os mostrados. Tente palavras mais específicas.</string>
-    <string name="vaults_search_names">Nomes</string>
-    <string name="vaults_search_nothing">Nada encontrado para “%1$s”</string>
-    <string name="vaults_search_placeholder">Buscar no cofre</string>
     <string name="vaults_settings">Configurações do cofre</string>
     <string name="vaults_settings_failed">Não foi possível salvar as configurações</string>
     <string name="vaults_share">Compartilhar</string>
@@ -130,7 +125,6 @@
     <string name="vaults_version_number">Versão %1$d</string>
     <string name="vaults_versions">Versões</string>
     <string name="vaults_versions_footer">A versão mais recente e as fixadas são sempre mantidas. As alterações valem em até uma hora.</string>
-    <string name="vaults_web_page">Página da web</string>
     <plurals name="vaults_days">
         <item quantity="one">%1$d dia</item>
         <item quantity="many">%1$d dias</item>
@@ -151,4 +145,5 @@
         <item quantity="many">%1$d versões</item>
         <item quantity="other">%1$d versões</item>
     </plurals>
+    <string name="vaults_no_access">Você não tem acesso a este cofre.</string>
 </resources>

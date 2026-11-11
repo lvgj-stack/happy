@@ -49,12 +49,15 @@ extension ChatItem {
         /// It follows a step of the turn, which it keeps 4 more from
         /// (`happy-turn-status--after-trace`); `TurnFold` says.
         public var afterStep = false
+        /// When the run ended, in ms; nil where it isn't known.
+        public var endedAt: Double?
 
-        public init(reason: String, durationMs: Double?, tools: Int, copyText: String?) {
+        public init(reason: String, durationMs: Double?, tools: Int, copyText: String?, endedAt: Double? = nil) {
             self.reason = reason
             self.durationMs = durationMs
             self.tools = tools
             self.copyText = copyText
+            self.endedAt = endedAt
         }
 
         /// Desktop's `TurnSummary` status: a steered turn, one that failed
@@ -173,8 +176,12 @@ public enum TurnFold {
         // How a turn ended keeps 4 more from a step right above it.
         for index in result.indices.dropFirst() {
             guard case .turnEnd(var ended) = result[index].role else { continue }
-            ended.afterStep = isStep(result[index - 1])
-            result[index].role = .turnEnd(ended)
+            let afterStep = isStep(result[index - 1])
+            guard ended.afterStep != afterStep else { continue }
+            ended.afterStep = afterStep
+            // Read from nothing but whether a step is above it: the same
+            // turn's end so placed again is the same making (`ChatItem.revision`).
+            result[index] = result[index].derived(afterStep ? 1 : 2) { $0.role = .turnEnd(ended) }
         }
         return MediaRuns.join(result)
     }
@@ -182,7 +189,10 @@ public enum TurnFold {
     static func fold(turn: String, _ group: [ChatItem], open: Bool) -> [ChatItem] {
         guard let status = group.firstIndex(where: { if case .turnEnd = $0.role { true } else { false } }),
               case .turnEnd(let ended) = group[status].role else { return group }
-        let finalAgent = group.lastIndex { $0.role == .agent }
+        // Quick replies are no answer; they stay under it.
+        func replies(_ item: ChatItem) -> Bool { item.pieces.contains { if case .quickReplies = $0 { true } else { false } } }
+        func shows(_ item: ChatItem) -> Bool { item.pieces.contains { if case .ui = $0 { true } else if case .mediaRows = $0 { true } else { false } } }
+        let finalAgent = group.lastIndex { $0.role == .agent && !replies($0) }
         let anchor = finalAgent ?? group.lastIndex(where: isStep)
         let kept = group.indices.filter { index in
             if index == anchor { return true }
@@ -190,7 +200,11 @@ public enum TurnFold {
             case .turnEnd, .user, .collaborator, .failure, .trace: return true
             case .tool(let tool): return tool.isResult
             case .question(let ask): return ask.phase != .answered
-            case .agent: return false
+            // Chat UI stays: a live control, a tree or media the agent
+            // showed, and quick replies, each with the words that brought it.
+            case .agent:
+                return replies(group[index]) || shows(group[index])
+                    || (group.indices.contains(index + 1) && (replies(group[index + 1]) || shows(group[index + 1])))
             }
         }
         guard kept.count < group.count else { return group }
@@ -200,9 +214,15 @@ public enum TurnFold {
             items.insert(trace, at: group.firstIndex(where: holdsTrace) ?? status)
             return items
         }
+        // The control rides above the answer and the words kept with it.
+        var traceAt = anchor
+        if var at = anchor {
+            while let previous = kept.last(where: { $0 < at }), previous == at - 1, group[previous].role == .agent, !replies(group[previous]) { at = previous }
+            traceAt = at
+        }
         var items: [ChatItem] = []
         for index in kept {
-            if index == anchor { items.append(trace) }
+            if index == traceAt { items.append(trace) }
             items.append(group[index])
         }
         return items

@@ -11,6 +11,8 @@ import com.slopus.happy.conversation.ConversationState
 import com.slopus.happy.conversation.Delivery
 import com.slopus.happy.conversation.FailureReason
 import com.slopus.happy.conversation.ToolUse
+import com.slopus.happy.conversation.ui.UiComponent
+import com.slopus.happy.conversation.ui.UiOffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -59,8 +61,12 @@ class CallTargetsTest {
     private fun end(turn: String, copy: String? = null, reason: String = "completed") = ConversationRow.TurnEnd("$turn:end", turn, reason, 5, 0, copy)
     private val target = CallTarget("a", "A", CallTarget.Kind.Task, CallTarget.Status.Idle)
 
+    /** [rows] as a conversation reads, oldest first, published newest first as [com.slopus.happy.conversation.Conversation] does. */
+    private fun conversation(rows: List<ConversationRow>, working: Boolean = true, draft: String = "") =
+        ConversationState(created = true, loaded = true, working = working, rows = rows.asReversed(), draft = draft)
+
     private fun read(rows: List<ConversationRow>, working: Boolean = true) =
-        CallTargetState.from(ConversationState(created = true, loaded = true, working = working, rows = rows), target)
+        CallTargetState.from(conversation(rows, working), target)
 
     private fun finals(rows: List<ConversationRow>, working: Boolean = true) =
         read(rows, working).messages.filter { it.role == CallMessage.Role.Assistant }.associate { it.id to it.final }
@@ -82,6 +88,18 @@ class CallTargetsTest {
         assertEquals(mapOf("m1:0" to true, "m2:0" to true), finals(rows, working = false))
     }
 
+    /** A show_ui call's components stand in its line's place: the words before them are as complete as before a tool line. */
+    @Test
+    fun chatUiAfterWordsCompletesThem() {
+        val shown = ConversationRow.Ui("m1:1:files", UiOffer("m1", "u1", "files"), UiComponent.Other("files", "2 files"))
+        assertEquals(mapOf("m1:0" to true), finals(listOf(said("m1:0", "Here they are"), shown)))
+        val pictures = ConversationRow.UiMedia("m1:1:pics", emptyList(), emptyList())
+        assertEquals(mapOf("m1:0" to true), finals(listOf(said("m1:0", "Here they are"), pictures)))
+        // Suggested replies are put under words written after them: they say nothing of the words above.
+        val replies = ConversationRow.Replies("m1:1", "m1", "c1", listOf("Yes"))
+        assertEquals(mapOf("m1:0" to false), finals(listOf(said("m1:0", "Shall I"), replies)))
+    }
+
     /** The person's new message while the agent writes completes nothing, queued on the phone or taken by the computer. */
     @Test
     fun thePersonsMessageMidStreamCompletesNothing() {
@@ -96,6 +114,9 @@ class CallTargetsTest {
     fun aRunThatStartsTheNextCompletesTheLastOnesWords() {
         val first = listOf(user("u1", "fix it"), said("a1:0", "Done."), end("r1", "Done."))
         assertEquals(mapOf("a1:0" to true), finals(first + user("u2", "next")))
+        // When the run ended is the turn's: what lastAgentReply says.
+        val timed = (first.last() as ConversationRow.TurnEnd).copy(endedAt = 1_700_000_000_000)
+        assertEquals(listOf(1_700_000_000_000L), read(first.dropLast(1) + timed).turns.map { it.endedAt })
         assertEquals(mapOf("a1:0" to true, "a2:0" to false), finals(first + said("a2:0", "On it")))
         val state = read(first + said("a2:0", "On it"))
         assertEquals("r1", state.messages.first { it.id == "a1:0" }.turn)
@@ -123,8 +144,7 @@ class CallTargetsTest {
             user("u3", "hello", Delivery.Sending),
             said("x:0", "thinking out loud"),
         )
-        val conversation = ConversationState(created = true, loaded = true, working = true, rows = rows, draft = "half typed")
-        val state = CallTargetState.from(conversation, target) { reason -> "rate limited: ${(reason as FailureReason.RateLimited).vendor}" }
+        val state = CallTargetState.from(conversation(rows, draft = "half typed"), target) { reason -> "rate limited: ${(reason as FailureReason.RateLimited).vendor}" }
         assertEquals(listOf(CallTurn("r1", "fix it", "Fixed."), CallTurn("r2", "again", null, "error", "rate limited: Claude")), state.turns)
         assertEquals("hello", state.unanswered?.text)
         assertEquals(CallMessage.Delivery.Queued, state.unanswered?.delivery)

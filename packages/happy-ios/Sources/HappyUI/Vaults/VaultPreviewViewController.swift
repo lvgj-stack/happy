@@ -7,7 +7,7 @@ import QuickLook
 import UIKit
 
 /// One vault entry's version, previewed by what it holds
-/// (`VaultPreviewKind`): a site as its live page, Markdown, pictures and
+/// (`VaultPreviewKind`): an app as its live page, Markdown, pictures and
 /// recordings in the artifact viewer (`ArtifactViewController.Vault`),
 /// text and code as coloured lines, anything else read whole into Quick
 /// Look, whose own view offers it to other apps. With no version given it
@@ -37,8 +37,15 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
     private var loading: Task<Void, Never>?
     private var following: Task<Void, Never>?
     private var gone = false
+    /// The folder the file is in, nil at the root; `.none` where that isn't
+    /// known (opened from search). For the Policy vault's own documents.
+    private let folder: VaultEntry??
+    private var accessWatch: Watch?
+    private var access: VaultAccess { session.vaultAccess(surfaceId) }
+    private var writable: Bool { access.canWrite(session.gate) }
 
-    init(session: Session, surfaceId: String, vaultName: String, entry: VaultEntry, version: Int? = nil) {
+    init(session: Session, surfaceId: String, vaultName: String, entry: VaultEntry, version: Int? = nil, parent: VaultEntry?? = .none) {
+        folder = parent
         self.session = session
         self.surfaceId = surfaceId
         self.vaultName = vaultName
@@ -72,6 +79,7 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
         spinner.hidesWhenStopped = true
         view.addSubview(spinner)
         setUpBar()
+        accessWatch = session.watchAccess { [weak self] in self?.setUpBar() }
         let library = library, surfaceId = surfaceId, entryId = entry.id, known = entry
         following = Task { [weak self] in
             let events = await library.entryEvents(surfaceId, entryId, known: known)
@@ -84,7 +92,7 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
     }
 
     private func showTitle() {
-        title = entry.name
+        title = entry.shownName
         navigationItem.subtitle = pinnedVersion.map(Strings.Vaults.version)
     }
 
@@ -128,15 +136,16 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
         let entry = entry
         let history = UIAction(title: Strings.Vaults.history, image: Glyphs.image("time-outline", size: 20)) { [weak self] _ in self?.openHistory() }
         if let number = pinnedVersion {
-            guard number != entry.latestVersion, entry.deletedAt == nil else { return [history] }
+            guard number != entry.latestVersion, entry.deletedAt == nil, writable else { return [history] }
             return [
                 UIAction(title: Strings.Vaults.restoreVersion, image: Glyphs.image("return-up-back-outline", size: 20)) { [weak self] _ in self?.restoreVersion(number) },
                 history,
             ]
         }
-        guard entry.deletedAt == nil else { return [history] }
+        guard entry.deletedAt == nil, writable else { return [history] }
+        let fixed = access.isProtected(entry, in: folder ?? nil, parentKnown: folder != nil)
         var items: [UIMenuElement] = [history]
-        var edits: [UIMenuElement] = [
+        var edits: [UIMenuElement] = fixed ? [] : [
             UIAction(title: Strings.Vaults.rename, image: Glyphs.image("create-outline", size: 20)) { [weak self] _ in self?.actions.rename(entry) },
             UIAction(title: Strings.Vaults.move, image: Glyphs.image("folder-outline", size: 20)) { [weak self] _ in self?.actions.move(entry) },
         ]
@@ -144,6 +153,7 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
             edits.append(UIAction(title: Strings.Vaults.uploadNewVersion, image: Glyphs.image("arrow-up-outline", size: 20)) { [weak self] _ in self?.actions.chooseNewVersion(of: entry) })
         }
         items.append(UIMenu(options: .displayInline, children: edits))
+        guard !fixed else { return items }
         items.append(UIMenu(options: .displayInline, children: [
             UIAction(title: Strings.Vaults.delete, image: Glyphs.image("trash-outline", size: 20), attributes: .destructive) { [weak self] _ in
                 guard let self else { return }
@@ -187,17 +197,17 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
         let (surfaceId, entry) = (surfaceId, entry)
         do {
             switch VaultPreviewKind(entry) {
-            case .site:
+            case .app:
                 let version = try await library.version(surfaceId, entry.id, number: number)
                 try Task.checkCancellation()
                 guard let artifact = version.artifact else { return show(message: Strings.artifactUnavailable) }
                 let files = (artifact.files ?? []).map { AgentWire.ArtifactVersion.File(path: $0.path, mimeType: $0.mimeType, size: Double($0.size)) }
                 let first = files.first { $0.path == artifact.entry } ?? AgentWire.ArtifactVersion.File(path: artifact.entry, mimeType: artifact.type == "markdown" ? "text/markdown" : "text/html", size: 0)
-                let shown = AgentWire.ArtifactVersion(artifactId: entry.id, number: number, title: entry.name, entry: first, files: files)
+                let shown = AgentWire.ArtifactVersion(artifactId: entry.id, number: number, title: entry.shownName, entry: first, files: files)
                 let read: ArtifactMedia.Files = .init(resource: "vault/\(surfaceId)/\(entry.id)/\(number)") { path, range in
                     try await client.vaultArtifactFile(surfaceId, entry.id, version: number, path: path, range: range)
                 }
-                embed(ArtifactViewController(session: session, vault: .init(surfaceId: surfaceId, entryId: entry.id, version: shown, files: read, site: true)))
+                embed(ArtifactViewController(session: session, vault: .init(surfaceId: surfaceId, entryId: entry.id, version: shown, files: read, app: true)))
             case .markdown, .image, .video:
                 // An earlier version's own size, which its ranges are read by.
                 var size = entry.size ?? 0
@@ -226,7 +236,7 @@ final class VaultPreviewViewController: UIViewController, QLPreviewControllerDat
             try await client.vaultContent(surfaceId, entryId, version: number, range: range)
         }
         return .init(surfaceId: surfaceId, entryId: entryId, version: AgentWire.ArtifactVersion(artifactId: entryId, number: number, title: entry.name, entry: file, files: [file]),
-                     files: files, site: false)
+                     files: files, app: false)
     }
 
     private func removeContent() {

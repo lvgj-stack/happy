@@ -41,6 +41,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.slopus.happy.R
 import com.slopus.happy.agent.AgentApiException
 import com.slopus.happy.agent.AgentSession
+import com.slopus.happy.agent.VaultAccess
 import com.slopus.happy.ui.artifacts.PlaceMessage
 import com.slopus.happy.ui.artifacts.PlaceScaffold
 import com.slopus.happy.ui.artifacts.PlaceTags
@@ -66,6 +67,7 @@ import com.slopus.happy.vaults.VaultItem
 import com.slopus.happy.vaults.VaultEvent
 import com.slopus.happy.vaults.VaultFolderFeed
 import com.slopus.happy.vaults.VaultLocation
+import com.slopus.happy.vaults.VaultNames
 import com.slopus.happy.vaults.VaultPreview
 import com.slopus.happy.vaults.VaultSort
 import com.slopus.happy.vaults.VaultSortField
@@ -78,6 +80,7 @@ import kotlinx.coroutines.launch
 
 object VaultFolderTags {
     const val SCREEN = "vault.folder"
+    const val LOCKED = "vault.folder.locked"
     const val LIST = "vault.folder.list"
     const val ROW = "vault.row"
     const val ROW_TILE = "vault.row.tile"
@@ -86,7 +89,6 @@ object VaultFolderTags {
     const val ROW_MORE = "vault.row.more"
     const val UPLOAD = "vault.upload"
     const val UPLOAD_CANCEL = "vault.upload.cancel"
-    const val SEARCH = "vault.search"
     const val ADD = "vault.add"
     const val MORE = "vault.more"
     const val LOADER = PlaceTags.LOADER
@@ -165,6 +167,19 @@ internal class VaultFolderModel(val session: AgentSession, val surfaceId: String
  */
 @Composable
 fun VaultFolderScreen(session: AgentSession, surfaceId: String, folderId: String?, name: String, onBack: () -> Unit, open: (Any) -> Unit) {
+    val surface by remember(session, surfaceId) { session.surface(surfaceId) }.collectAsStateWithLifecycle(session.surfaces.value[surfaceId])
+    // Listed for the team, closed to this person's role: its name, and nothing asked of it.
+    if (surface?.access == VaultAccess.None) {
+        PlaceScaffold(surface?.name?.ifEmpty { null } ?: VaultNames.shown(name), onBack, VaultFolderTags.SCREEN) {
+            SeedlingEmpty(stringResource(R.string.vaults_no_access), Modifier.testTag(VaultFolderTags.LOCKED))
+        }
+        return
+    }
+    VaultFolderPage(session, surfaceId, folderId, name, onBack, open)
+}
+
+@Composable
+private fun VaultFolderPage(session: AgentSession, surfaceId: String, folderId: String?, name: String, onBack: () -> Unit, open: (Any) -> Unit) {
     val model = viewModel(key = "vault:${session.connectionId}:$surfaceId:${folderId ?: "root"}") { VaultFolderModel(session, surfaceId, folderId) }
     val state by model.feed.state.collectAsStateWithLifecycle()
     val place by model.place.collectAsStateWithLifecycle()
@@ -172,9 +187,10 @@ fun VaultFolderScreen(session: AgentSession, surfaceId: String, folderId: String
     val tasks by session.vaults.uploads.tasks.collectAsStateWithLifecycle()
     val uploads = remember(tasks, folderId) { tasks.filter { it.surfaceId == surfaceId && it.parentId == folderId } }
     val actions = rememberVaultActions(session, surfaceId, open)
+    actions.within = place?.item?.let { it.name to (it.parentId == null) }
     var viewing by remember { mutableStateOf<Pair<List<VaultItem>, Int>?>(null) }
     val vaultName = surface?.name.orEmpty()
-    val title = if (folderId == null) surfaceTitle(session, vaultName.ifEmpty { name }) else place?.item?.name ?: name
+    val title = if (folderId == null) surfaceTitle(session, vaultName.ifEmpty { name }) else place?.item?.shownName ?: VaultNames.shown(name)
     val subtitle = when {
         folderId == null -> null
         place?.inTrash == true -> stringResource(R.string.vaults_in_trash)
@@ -187,19 +203,17 @@ fun VaultFolderScreen(session: AgentSession, surfaceId: String, folderId: String
                 val media = state.entries.filter(VaultPreview::inViewer)
                 viewing = media to media.indexOfFirst { it.id == entry.id }.coerceAtLeast(0)
             }
-            else -> open(VaultFileRoute(session.connectionId, surfaceId, entry.id, name = entry.name))
+            else -> open(VaultFileRoute(session.connectionId, surfaceId, entry.id, name = entry.shownName))
         }
     }
     PlaceScaffold(title, onBack, VaultFolderTags.SCREEN, subtitle = subtitle, actions = {
-        IconButton(onClick = { open(VaultSearchRoute(session.connectionId, surfaceId)) }, modifier = Modifier.testTag(VaultFolderTags.SEARCH)) {
-            Icon(Ionicon.SearchOutline, 24.dp, HappyTheme.colors.text, contentDescription = stringResource(R.string.vaults_search))
-        }
-        AddMenu(onMedia = { actions.uploadMedia(folderId) }, onFiles = { actions.uploadFiles(folderId) }, onFolder = { actions.newFolder(folderId) })
+        if (actions.writable) AddMenu(onMedia = { actions.uploadMedia(folderId) }, onFiles = { actions.uploadFiles(folderId) }, onFolder = { actions.newFolder(folderId) })
         val items: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
             SortItems(state.sort, close) { model.sort(it) }
             HappyMenuDivider()
             HappyMenuItem(stringResource(R.string.vaults_trash), onClick = { close(); open(VaultTrashRoute(session.connectionId, surfaceId)) }, leading = { MenuGlyph(Ionicon.TrashOutline) })
-            HappyMenuItem(stringResource(R.string.vaults_settings), onClick = { close(); open(VaultSettingsRoute(session.connectionId, surfaceId)) }, leading = { MenuGlyph(Ionicon.SettingsOutline) })
+            // Keeping versions is the team's to set where the person can't write, and fixed for the Policy vault.
+            if (actions.writable && !actions.policy) HappyMenuItem(stringResource(R.string.vaults_settings), onClick = { close(); open(VaultSettingsRoute(session.connectionId, surfaceId)) }, leading = { MenuGlyph(Ionicon.SettingsOutline) })
             val folder = place?.item
             if (folderId == null) {
                 HappyMenuItem(stringResource(R.string.vaults_download_vault), onClick = { close(); actions.save(VaultRootItem.of(surfaceId, vaultName)) }, leading = { MenuGlyph(Ionicon.DownloadOutline) })
@@ -237,7 +251,7 @@ internal fun VaultFolderContent(
         !state.loaded -> LoadingIndicator(Modifier.testTag(VaultFolderTags.LOADER))
         state.empty && uploads.isEmpty() -> SeedlingEmpty(
             stringResource(R.string.vaults_folder_empty),
-            button = actions?.let { stringResource(R.string.vaults_upload_files) to { it.uploadFiles(folderId) } },
+            button = actions?.takeIf { it.writable }?.let { stringResource(R.string.vaults_upload_files) to { it.uploadFiles(folderId) } },
         )
         else -> LazyColumn(
             Modifier.fillMaxSize().testTag(VaultFolderTags.LIST),
@@ -289,7 +303,7 @@ internal fun VaultItemRow(
                     .weight(1f)
                     .padding(vertical = 8.dp),
             ) {
-                Text(entry.name, style = VaultText.name, color = colors.text, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.testTag(VaultFolderTags.ROW_NAME))
+                Text(entry.shownName, style = VaultText.name, color = colors.text, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.testTag(VaultFolderTags.ROW_NAME))
                 Text(
                     detail ?: vaultItemDetail(entry),
                     style = VaultText.meta,
@@ -301,7 +315,7 @@ internal fun VaultItemRow(
             }
             if (actions != null) {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(VaultRowSpec.more).testTag(VaultFolderTags.ROW_MORE)) {
-                    Icon(Ionicon.EllipsisVertical, 20.dp, colors.textSecondary, contentDescription = stringResource(R.string.vaults_more_actions, entry.name))
+                    Icon(Ionicon.EllipsisVertical, 20.dp, colors.textSecondary, contentDescription = stringResource(R.string.vaults_more_actions, entry.shownName))
                 }
             }
         }
@@ -315,7 +329,7 @@ internal fun VaultItemRow(
     }
 }
 
-/** The 40 tile: a folder's, an artifact's site, or the file's own icon. */
+/** The 40 tile: a folder's, an app's, or the file's own icon. */
 @Composable
 internal fun VaultTile(entry: VaultItem, modifier: Modifier = Modifier) {
     val colors = HappyTheme.colors
@@ -329,7 +343,7 @@ internal fun VaultTile(entry: VaultItem, modifier: Modifier = Modifier) {
     ) {
         when {
             entry.isFolder -> Icon(Ionicon.Folder, VaultRowSpec.glyph, colors.textLink)
-            entry.isArtifact -> Icon(if (entry.artifact?.type == "markdown") Ionicon.DocumentTextOutline else Ionicon.GlobeOutline, VaultRowSpec.glyph, colors.textLink)
+            entry.isArtifact -> Icon(Ionicon.AppsOutline, VaultRowSpec.glyph, colors.textLink)
             else -> com.slopus.happy.ui.files.FileIcon(entry.name, VaultRowSpec.glyph)
         }
     }
@@ -359,7 +373,7 @@ internal fun VaultUploadRow(task: VaultUploads.Task, onCancel: () -> Unit, onRet
             }
         }
         Column(Modifier.padding(start = VaultRowSpec.textX - VaultRowSpec.tileX - VaultRowSpec.tile).weight(1f).padding(vertical = 8.dp)) {
-            Text(task.name, style = VaultText.name, color = colors.text, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+            Text(VaultNames.shown(task.name), style = VaultText.name, color = colors.text, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
             Text(uploadDetail(task), style = VaultText.meta, color = if (task.status == VaultUploads.Status.Failed) colors.textDestructive else colors.textSecondary, maxLines = if (task.status == VaultUploads.Status.Failed) 3 else 1, modifier = Modifier.padding(top = 2.dp))
         }
         IconButton(onClick = onCancel, modifier = Modifier.size(VaultRowSpec.more).testTag(VaultFolderTags.UPLOAD_CANCEL)) {
@@ -394,7 +408,7 @@ private fun NameTakenAlert(session: AgentSession, task: VaultUploads.Task) {
     val uploads = session.vaults.uploads
     HappyAlert(
         Alert(
-            title = stringResource(R.string.vaults_name_taken_title, task.name),
+            title = stringResource(R.string.vaults_name_taken_title, VaultNames.shown(task.name)),
             message = stringResource(R.string.vaults_name_taken_message),
             buttons = listOf(
                 AlertButton(stringResource(R.string.common_cancel)) { uploads.cancel(task.id) },
@@ -462,7 +476,7 @@ internal fun MenuGlyph(icon: Ionicon) = Icon(icon, 20.dp, HappyTheme.colors.text
 @Composable
 internal fun ColumnScope.VaultItemMenuItems(entry: VaultItem, actions: VaultActions, close: () -> Unit, inTrash: Boolean = false) {
     if (inTrash || entry.deletedAt != null) {
-        if (entry.deletedAt != null) HappyMenuItem(stringResource(R.string.vaults_restore), onClick = { close(); actions.restore(entry) }, leading = { MenuGlyph(Ionicon.ArrowUndoOutline) })
+        if (entry.deletedAt != null && actions.writable) HappyMenuItem(stringResource(R.string.vaults_restore), onClick = { close(); actions.restore(entry) }, leading = { MenuGlyph(Ionicon.ArrowUndoOutline) })
         HappyMenuItem(stringResource(R.string.vaults_save_to_device), onClick = { close(); actions.save(entry) }, leading = { MenuGlyph(Ionicon.DownloadOutline) })
         if (!entry.isFolder) HappyMenuItem(stringResource(R.string.vaults_history), onClick = { close(); actions.history(entry) }, leading = { MenuGlyph(Ionicon.TimeOutline) })
         return
@@ -471,10 +485,11 @@ internal fun ColumnScope.VaultItemMenuItems(entry: VaultItem, actions: VaultActi
     HappyMenuItem(stringResource(R.string.vaults_share), onClick = { close(); actions.share(entry) }, leading = { MenuGlyph(Ionicon.ShareOutline) })
     HappyMenuItem(stringResource(R.string.vaults_save_to_device), onClick = { close(); actions.save(entry) }, leading = { MenuGlyph(Ionicon.DownloadOutline) })
     HappyMenuItem(stringResource(R.string.vaults_history), onClick = { close(); actions.history(entry) }, leading = { MenuGlyph(Ionicon.TimeOutline) })
-    HappyMenuItem(stringResource(R.string.vaults_rename), onClick = { close(); actions.rename(entry) }, leading = { MenuGlyph(Ionicon.CreateOutline) })
-    HappyMenuItem(stringResource(R.string.vaults_move), onClick = { close(); actions.move(entry) }, leading = { MenuGlyph(Ionicon.MoveOutline) })
-    if (!entry.isFolder) HappyMenuItem(stringResource(R.string.vaults_upload_new_version), onClick = { close(); actions.replace(entry) }, leading = { MenuGlyph(Ionicon.CloudUploadOutline) })
-    HappyMenuItem(stringResource(R.string.vaults_delete), onClick = { close(); actions.delete(entry) }, leading = { MenuGlyph(Ionicon.TrashOutline) }, destructive = true)
+    val changes = actions.canChange(entry)
+    if (changes) HappyMenuItem(stringResource(R.string.vaults_rename), onClick = { close(); actions.rename(entry) }, leading = { MenuGlyph(Ionicon.CreateOutline) })
+    if (changes) HappyMenuItem(stringResource(R.string.vaults_move), onClick = { close(); actions.move(entry) }, leading = { MenuGlyph(Ionicon.MoveOutline) })
+    if (!entry.isFolder && actions.writable) HappyMenuItem(stringResource(R.string.vaults_upload_new_version), onClick = { close(); actions.replace(entry) }, leading = { MenuGlyph(Ionicon.CloudUploadOutline) })
+    if (changes) HappyMenuItem(stringResource(R.string.vaults_delete), onClick = { close(); actions.delete(entry) }, leading = { MenuGlyph(Ionicon.TrashOutline) }, destructive = true)
 }
 
 /** The whole vault as an entry for a download: [VaultActions.save] writes it as one zip. */

@@ -71,6 +71,7 @@ data class KeptConversation(
             run.startedAt?.let { put("startedAt", it) }
             run.endedAt?.let { put("endedAt", it) }
             run.reason?.let { put("reason", it) }
+            if (run.standalone) put("kind", "standalone")
             put("messages", JsonArray(run.messages.map(::messageJson)))
         }
 
@@ -81,15 +82,26 @@ data class KeptConversation(
             put("content", JsonArray(message.content.map(::blockJson)))
             message.status?.let { put("status", it) }
             message.runId?.let { put("runId", it) }
-            putJsonObject("metadata") { message.senderAgentId?.let { put("senderAgentId", it) } }
+            putJsonObject("metadata") {
+                message.senderAgentId?.let { put("senderAgentId", it) }
+                message.userId?.let { put("userId", it) }
+            }
             message.failure?.let { put("failure", it) }
             message.error?.let { put("error", it) }
+            message.quickReply?.let { put("quickReply", it.json()) }
         }
 
         private fun blockJson(block: Block): JsonObject = when (block) {
             is Block.Text -> buildJsonObject { put("type", "text"); put("text", block.text) }
             is Block.Reasoning -> buildJsonObject { put("type", "reasoning"); put("text", block.text) }
             is Block.Image -> buildJsonObject { put("type", "image"); put("mimeType", block.mimeType); put("data", block.data) }
+            is Block.File -> buildJsonObject {
+                put("type", "file")
+                put("attachment", block.attachment)
+                put("name", block.name)
+                block.mimeType?.let { put("mimeType", it) }
+                block.size?.let { put("size", it) }
+            }
             is Block.ToolCall -> buildJsonObject {
                 put("type", "tool_call")
                 block.id?.let { put("id", it) }
@@ -112,6 +124,9 @@ data class KeptConversation(
                 block.elevated?.let { put("elevated", it) }
             }
             is Block.Compaction -> buildJsonObject { put("type", "compaction"); put("status", block.status) }
+            is Block.Ui -> block.raw
+            is Block.Action -> block.raw
+            is Block.QuickReplies -> block.raw
             is Block.Unknown -> buildJsonObject { put("type", block.type) }
         }
 
@@ -223,6 +238,8 @@ data class KeptConversation(
                 put("input", presentation.input)
                 presentation.command?.let { put("command", it) }
             }
+            is Presentation.Ui -> presentation.raw
+            is Presentation.QuickReplies -> presentation.raw
         }
 
         private fun hunkJson(hunk: Presentation.FileDiff.Hunk): JsonObject = buildJsonObject {

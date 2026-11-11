@@ -12,6 +12,12 @@ public struct ProMonth: Codable, Equatable, Sendable {
         self.start = start
         self.end = end
     }
+
+    /// The calendar month, in UTC, that `now` is in: a granted subscription's month (`Subscription.grantsPro`).
+    public static func calendar(at now: Double) -> ProMonth {
+        let month = ProPass.calendar.dateInterval(of: .month, for: Date(timeIntervalSince1970: now))
+        return ProMonth(start: month?.start.timeIntervalSince1970 ?? now, end: month?.end.timeIntervalSince1970)
+    }
 }
 
 /// RevenueCat's word on a customer's `pro` entitlement, from a subscriber
@@ -23,7 +29,8 @@ public struct ProMonth: Codable, Equatable, Sendable {
 /// (`subscriptions[product_identifier]`, none for a one-time product), when
 /// its paid period ends (`renews`, its `expires_date`) and until when a
 /// failed renewal keeps access (`graceUntil`, `grace_period_expires_date`);
-/// and RevenueCat's own time when it answered (`checkedAt`, `request_date`).
+/// and RevenueCat's own time when it answered (`checkedAt`, `request_date`);
+/// the product itself (`product`, `product_identifier`), for its price.
 /// Any product granting `pro` counts, whatever is on sale.
 public struct ProPass: Codable, Equatable, Sendable {
     public static let entitlement = "pro"
@@ -33,13 +40,16 @@ public struct ProPass: Codable, Equatable, Sendable {
     public var renews: Double?
     public var graceUntil: Double?
     public var checkedAt: Double
+    /// Nil in a pass kept before it was read.
+    public var product: String?
 
-    public init(purchased: Double, expires: Double?, renews: Double? = nil, graceUntil: Double? = nil, checkedAt: Double) {
+    public init(purchased: Double, expires: Double?, renews: Double? = nil, graceUntil: Double? = nil, checkedAt: Double, product: String? = nil) {
         self.purchased = purchased
         self.expires = expires
         self.renews = renews
         self.graceUntil = graceUntil
         self.checkedAt = checkedAt
+        self.product = product
     }
 
     /// Access at RevenueCat's time `at`: the device's clock alone decides nothing here.
@@ -73,7 +83,7 @@ public struct ProPass: Codable, Equatable, Sendable {
         Self.calendar.date(byAdding: .month, value: n, to: Date(timeIntervalSince1970: purchase))?.timeIntervalSince1970
     }
 
-    private static let calendar: Calendar = {
+    static let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return calendar
@@ -99,7 +109,7 @@ public struct ProPass: Codable, Equatable, Sendable {
         let subscription = subscriber["subscriptions"]?[product]
         guard let renews = optionalDate(subscription?["expires_date"]),
               let graceUntil = optionalDate(subscription?["grace_period_expires_date"]) else { return Answer.none }
-        return .pro(ProPass(purchased: purchased, expires: expires.value, renews: renews.value, graceUntil: graceUntil.value, checkedAt: checkedAt))
+        return .pro(ProPass(purchased: purchased, expires: expires.value, renews: renews.value, graceUntil: graceUntil.value, checkedAt: checkedAt, product: product))
     }
 
     private struct Optional {

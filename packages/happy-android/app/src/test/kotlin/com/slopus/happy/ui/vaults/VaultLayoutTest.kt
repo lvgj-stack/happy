@@ -4,7 +4,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
@@ -115,10 +114,15 @@ class VaultLayoutTest {
         rule.onNodeWithText("Moved from the top of the vault to Reports").assertExists()
     }
 
-    @Test fun snippetsMarkWhatWasSearched() {
-        val text = highlight("…the Quarterly report is due…", "quarterly")
-        val span = text.spanStyles.single()
-        assertEquals("Quarterly", text.text.substring(span.start, span.end))
-        assertEquals(FontWeight.SemiBold, span.item.fontWeight)
+    @Test fun anAppIsSharedAsItsFileUnderItsShownName() {
+        val uri = android.net.Uri.parse("content://com.slopus.happy.dev.conversation.media/vault/rocket.artifact")
+        val send = vaultShare(uri, VaultItem(id = "a1", name = "rocket.artifact", kind = VaultItem.ARTIFACT, version = "v1"))
+        assertEquals(android.content.Intent.ACTION_SEND, send.action)
+        assertEquals(uri, androidx.core.content.IntentCompat.getParcelableExtra(send, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java))
+        assertEquals("rocket", send.getStringExtra(android.content.Intent.EXTRA_TITLE))
+        assertEquals("rocket", send.clipData?.description?.label)
+        assertEquals(uri, send.clipData?.getItemAt(0)?.uri)
+        assertEquals("application/octet-stream", send.clipData?.description?.getMimeType(0))
+        assertTrue(send.flags and android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
     }
 }

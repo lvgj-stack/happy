@@ -772,6 +772,13 @@ final class LegacyChatViewController: UIViewController, ChatListViewDelegate, Ch
         MessageLiftOverlay.putBack(from: self)
         if contentInstalled { keepStripOffset() }
         if ultraKeyboard?.isDriving == true { ultraKeyboard?.dismissImmediately() }
+        // A swipe back let go of: the dock rides the keyboard where it is,
+        // not where the swipe's notifications left it.
+        transitionCoordinator?.animate(alongsideTransition: nil) { [weak self] context in
+            guard context.isCancelled, let self, self.view.window != nil else { return }
+            self.ultraKeyboard?.resyncWithGuide()
+            self.view.setNeedsLayout()
+        }
         // Screens pushed from here, and the one under it, have their bar.
         if hidesHeader, navigationController?.topViewController !== self {
             navigationController?.setNavigationBarHidden(false, animated: animated)
@@ -1466,7 +1473,7 @@ final class LegacyChatViewController: UIViewController, ChatListViewDelegate, Ch
         updateHeader()
         showHeader(animated: true)
         updatePlaceholder()
-        list.scrollToNewest(animated: true)
+        list.revealNextSend()
     }
 
     /// A session this screen just made, whose row the account's home
@@ -1964,8 +1971,8 @@ final class LegacyChatViewController: UIViewController, ChatListViewDelegate, Ch
         case .copyMenu, .selectable, .markdownSelectable:
             // Long presses; see `chatList(_:hold:frame:at:)`.
             break
-        case .openMedia, .openArtifact, .toggleTurn, .openURL:
-            // Only V2 conversations show media, artifacts, turns and tool screens.
+        case .openMedia, .openArtifact, .toggleTurn, .openURL, .linkButton, .ui:
+            // Only V2 conversations show media, artifacts, turns, tool screens and chat UI.
             break
         case .toggleDownload(let ref):
             chatAttachments?.toggle(ref)
@@ -2139,7 +2146,7 @@ final class LegacyChatViewController: UIViewController, ChatListViewDelegate, Ch
             return
         }
         list.ultra.flight?.identify(localId)
-        list.scrollToNewest(animated: true)
+        list.revealNextSend()
         // A message sent while the agent waits on questions answers them:
         // once it is delivered, the forms are dismissed (SessionView's
         // handleSend), so the agent reads the text as the reply.

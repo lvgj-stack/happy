@@ -177,7 +177,7 @@ final class VaultTrashViewController: UIViewController {
             let when = input.words.time(Date(timeIntervalSince1970: (item.entry.deletedAt ?? item.entry.updatedAt) / 1000), now: input.now, calendar: input.calendar)
             let folder = (item.path as NSString).deletingLastPathComponent
             let from = folder.isEmpty || folder == "/" ? Strings.Vaults.title : String(folder.dropFirst())
-            items.append(VaultListItems.row(id: VaultListItems.entryID(item.entry.id), entry: item.entry, title: item.entry.name,
+            items.append(VaultListItems.row(id: VaultListItems.entryID(item.entry.id), entry: item.entry, title: item.entry.shownName,
                                             subtitle: Strings.Vaults.deletedFrom(from, when), place: place, waiting: false, input: list))
         }
         return items
@@ -192,9 +192,13 @@ final class VaultTrashViewController: UIViewController {
 
     // MARK: Acts
 
+    /// Restoring changes the vault: only where the person's role may write.
+    private var writable: Bool { session.vaultAccess(surfaceId).canWrite(session.gate) }
+
     private func open(_ id: String) {
         guard let item = items[id] else { return }
-        let sheet = UIAlertController(title: item.entry.name, message: nil, preferredStyle: .actionSheet)
+        guard writable else { return item.entry.isFolder ? () : preview(item) }
+        let sheet = UIAlertController(title: item.entry.shownName, message: nil, preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: Strings.Vaults.restore, style: .default) { [weak self] _ in self?.restore(item) })
         sheet.addAction(UIAlertAction(title: Strings.Vaults.restoreTo, style: .default) { [weak self] _ in self?.restoreTo(item) })
         if !item.entry.isFolder {
@@ -211,23 +215,23 @@ final class VaultTrashViewController: UIViewController {
 
     private func menu(_ id: String) -> UIMenu? {
         guard let item = items[id] else { return nil }
-        var children: [UIMenuElement] = [
+        var children: [UIMenuElement] = !writable ? [] : [
             UIAction(title: Strings.Vaults.restore, image: Glyphs.image("return-up-back-outline", size: 20)) { [weak self] _ in self?.restore(item) },
             UIAction(title: Strings.Vaults.restoreTo, image: Glyphs.image("folder-outline", size: 20)) { [weak self] _ in self?.restoreTo(item) },
         ]
         if !item.entry.isFolder {
             children.append(UIAction(title: Strings.Vaults.preview, image: Glyphs.image("eye-outline", size: 20)) { [weak self] _ in self?.preview(item) })
         }
-        return UIMenu(children: children)
+        return children.isEmpty ? nil : UIMenu(children: children)
     }
 
     private func swipeActions(_ id: String) -> [ListSwipeAction] {
-        guard let item = items[id] else { return [] }
+        guard let item = items[id], writable else { return [] }
         return [ListSwipeAction(title: Strings.Vaults.restore, image: .icon(.ionicons("return-up-back-outline"), size: 20), color: UIColor(Palette.todoCheck)) { [weak self] in self?.restore(item) }]
     }
 
     private func accessibilityActions(_ id: String) -> [UIAccessibilityCustomAction] {
-        guard let item = items[id] else { return [] }
+        guard let item = items[id], writable else { return [] }
         return [
             UIAccessibilityCustomAction(name: Strings.Vaults.restore) { [weak self] _ in self?.restore(item); return true },
             UIAccessibilityCustomAction(name: Strings.Vaults.restoreTo) { [weak self] _ in self?.restoreTo(item); return true },
@@ -255,8 +259,13 @@ final class VaultTrashViewController: UIViewController {
             } catch AgentClientError.status(409, "name_taken", _) {
                 guard let self else { return }
                 let free = await library.freeName(surfaceId, parentId: parent?.id ?? item.entry.parentId, for: name ?? item.entry.name)
-                self.actions.askName(title: Strings.Vaults.nameTaken(name ?? item.entry.name), current: free, action: Strings.Vaults.restore) { [weak self] next in
-                    self?.restore(item, to: parent, name: next)
+                let app = item.entry.kind == .artifact
+                self.actions.askName(title: Strings.Vaults.nameTaken(VaultEntry.shownName(name ?? item.entry.name)), current: VaultEntry.shownName(free),
+                                     action: Strings.Vaults.restore) { [weak self] next in
+                    guard let self else { return }
+                    // An app keeps its `.artifact`; nothing else may take it.
+                    if !app, VaultEntry.kind(named: next) == .artifact { return self.actions.refuse(Strings.Vaults.artifactSuffixRefused) }
+                    self.restore(item, to: parent, name: app ? VaultEntry.appName(next) : next)
                 }
             } catch {
                 self?.actions.show(error, name: name ?? item.entry.name)

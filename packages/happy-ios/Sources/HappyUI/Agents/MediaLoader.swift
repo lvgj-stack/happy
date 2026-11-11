@@ -69,16 +69,22 @@ final class MediaLoader: NSObject, ChatMediaSource {
         }
     }
 
-    /// What the conversation shows now, by the keys its plans draw.
+    /// Each row's making already registered (`ChatItem.revision`).
+    private var registered: [String: UInt64] = [:]
+
+    /// What the conversation shows now, by the keys its plans draw: each
+    /// row once per making of it.
     func register(_ items: [ChatItem]) {
         for item in items {
+            if item.revision != 0, registered[item.id] == item.revision { continue }
+            registered[item.id] = item.revision
             for piece in item.pieces {
                 switch piece {
                 case .picture(let id, _, let data): sent[Self.sentKey(id)] = data
                 case .sentFile(let file): local[Self.sentKey(file.id)] = file
-                case .gallery(let media, _), .tree(let media, _): for one in media { tools[one.key] = one }
+                case .gallery(let media, _), .tree(let media, _), .mediaRows(let media, _): for one in media { tools[one.key] = one }
                 case .file(let one): tools[one.key] = one
-                case .text, .artifact, .sidebarProposal: break
+                case .text, .artifact, .sidebarProposal, .ui, .quickReplies: break
                 }
             }
         }

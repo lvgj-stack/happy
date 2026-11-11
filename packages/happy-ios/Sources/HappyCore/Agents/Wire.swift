@@ -302,13 +302,24 @@ extension AgentWire {
         public var type: String
         public var name: String
         public var version: String?
+        /// A vault's on a Happy Cloud server: what the person may do in it
+        /// (`none`, `read`, `write`), and whether it is the Policy vault.
+        public var access: String?
+        public var policyVault: Bool?
+        /// When it last changed (ms since 1970): what breaks search's ties.
+        public var updatedAt: Double?
 
-        public init(id: String, type: String, name: String, version: String? = nil) {
+        public init(id: String, type: String, name: String, version: String? = nil, access: String? = nil, policyVault: Bool? = nil, updatedAt: Double? = nil) {
             self.id = id
             self.type = type
             self.name = name
             self.version = version
+            self.access = access
+            self.policyVault = policyVault
+            self.updatedAt = updatedAt
         }
+
+        public var vaultAccess: VaultAccess { VaultAccess(access: access, policyVault: policyVault) }
     }
 
     public struct Mode: Equatable, Sendable, Codable {
@@ -391,6 +402,19 @@ extension AgentWire {
         /// the service message's compaction block.
         public var tokensBefore: Double?
         public var tokensAfter: Double?
+        /// A `show_ui` call's document (`ui`); its `media` components name
+        /// `items` by index.
+        public var shownUi: PresentedUi?
+        /// A `suggest_replies` call's options (`quick_replies`).
+        public var options: [String]?
+
+        public var ui: UiDocument? { shownUi?.document }
+
+        private enum CodingKeys: String, CodingKey {
+            case type, items, layout, artifactId, artifactType, title, version, shows, command, input, query, operations, files, model, output
+            case target, sources, omittedFiles, agentId, tokensBefore, tokensAfter, options
+            case shownUi = "ui"
+        }
 
         /// One `exploration` step: `list` a `target`, `read` a `name`, or
         /// `search` by `command`, with its `query` and `path` when known.
@@ -491,9 +515,15 @@ extension AgentWire {
         case toolCall(id: String, name: String, status: String, presentation: Presentation?, arguments: JSONValue? = nil, output: String? = nil, result: JSONValue? = nil, review: ToolReview? = nil)
         /// One context compaction, inside a service message.
         case compaction(Compaction)
+        /// A document the daemon wrote itself (protocol 35).
+        case ui(UiDocument)
+        /// A chat UI action, in its attempt record.
+        case action(UiActionBlock)
+        /// Replies the daemon suggested itself (`quick_replies`).
+        case quickReplies([String])
         case unknown(String)
 
-        enum CodingKeys: String, CodingKey { case type, text, mimeType, data, id, name, status, presentation, arguments, result, elevated, review }
+        enum CodingKeys: String, CodingKey { case type, text, mimeType, data, id, name, status, presentation, arguments, result, elevated, review, ui, options }
         enum ResultKeys: String, CodingKey { case output }
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -512,7 +542,9 @@ extension AgentWire {
                 let presentation = try? container.decodeIfPresent(Presentation.self, forKey: .presentation)
                 let keepsRaw = ToolRaw.keeps(name: name, presentation: presentation?.type)
                 let result = asks ? try? container.nestedContainer(keyedBy: ResultKeys.self, forKey: .result) : nil
-                let rawArguments = asks || keepsRaw ? (try? container.decodeIfPresent(JSONValue.self, forKey: .arguments)) ?? nil : nil
+                let rawArguments = asks || keepsRaw
+                    ? (try? container.decodeIfPresent(JSONValue.self, forKey: .arguments)) ?? nil
+                    : (try? ToolSummary.compactArguments(name: name, from: container.superDecoder(forKey: .arguments))) ?? nil
                 let rawResult = keepsRaw ? (try? container.decodeIfPresent(JSONValue.self, forKey: .result)) ?? nil : nil
                 var review = try? container.decodeIfPresent(ToolReview.self, forKey: .review)
                 review?.elevated = (try? container.decodeIfPresent(Bool.self, forKey: .elevated)) ?? nil
@@ -526,6 +558,13 @@ extension AgentWire {
                     review: review ?? nil
                 )
             case "compaction": self = .compaction(try Compaction(from: decoder))
+            // One that can't be read is skipped, never the message.
+            case "ui":
+                if let document = try? container.decode(UiDocument.self, forKey: .ui) { self = .ui(document) } else { self = .unknown(type) }
+            case "action":
+                if let block = try? UiActionBlock(from: decoder) { self = .action(block) } else { self = .unknown(type) }
+            case "quick_replies":
+                if let options = try? container.decode([String].self, forKey: .options) { self = .quickReplies(options) } else { self = .unknown(type) }
             default: self = .unknown(type)
             }
         }
@@ -553,6 +592,15 @@ extension AgentWire {
             case .compaction(let compaction):
                 try container.encode("compaction", forKey: .type)
                 try compaction.encode(to: encoder)
+            case .ui(let document):
+                try container.encode("ui", forKey: .type)
+                try container.encode(document, forKey: .ui)
+            case .action(let block):
+                try container.encode("action", forKey: .type)
+                try block.encode(to: encoder)
+            case .quickReplies(let options):
+                try container.encode("quick_replies", forKey: .type)
+                try container.encode(options, forKey: .options)
             case .unknown(let type): try container.encode(type, forKey: .type)
             }
         }
@@ -661,8 +709,10 @@ extension AgentWire {
         /// failure (`failure`), kept as sent; `Failure` reads them.
         public var error: JSONValue?
         public var failure: JSONValue?
+        /// The suggested reply a person's message is (`quickReply`).
+        public var quickReply: QuickReply?
 
-        public init(id: String, role: String, createdAt: Double, content: [Block], status: String? = nil, runId: String? = nil, metadata: MessageMetadata? = nil, error: JSONValue? = nil, failure: JSONValue? = nil) {
+        public init(id: String, role: String, createdAt: Double, content: [Block], status: String? = nil, runId: String? = nil, metadata: MessageMetadata? = nil, error: JSONValue? = nil, failure: JSONValue? = nil, quickReply: QuickReply? = nil) {
             self.id = id
             self.role = role
             self.createdAt = createdAt
@@ -672,19 +722,23 @@ extension AgentWire {
             self.metadata = metadata
             self.error = error
             self.failure = failure
+            self.quickReply = quickReply
         }
     }
 
     /// A message's public provenance (`metadata`): the agent that sent a
     /// message the daemon wrote on its behalf, and that agent's one line on
-    /// what it is.
+    /// what it is; on a team's computer, the member who wrote a person's
+    /// message (`userId`, named by `GET /v0/users`).
     public struct MessageMetadata: Equatable, Sendable, Codable {
         public var senderAgentId: String?
         public var senderAgentExplanation: String?
+        public var userId: String?
 
-        public init(senderAgentId: String? = nil, senderAgentExplanation: String? = nil) {
+        public init(senderAgentId: String? = nil, senderAgentExplanation: String? = nil, userId: String? = nil) {
             self.senderAgentId = senderAgentId
             self.senderAgentExplanation = senderAgentExplanation
+            self.userId = userId
         }
     }
 
@@ -697,10 +751,13 @@ extension AgentWire {
         /// `error`; nil while it runs.
         public var endedAt: Double?
         public var reason: String?
+        /// `standalone` when it was stored already finished, outside any
+        /// turn; nil on every turn.
+        public var kind: String?
         public var messages: [Message]?
 
-        public init(id: String, status: String, startedAt: Double? = nil, endedAt: Double? = nil, reason: String? = nil, messages: [Message]? = nil) {
-            self.id = id; self.status = status; self.startedAt = startedAt; self.endedAt = endedAt; self.reason = reason; self.messages = messages
+        public init(id: String, status: String, startedAt: Double? = nil, endedAt: Double? = nil, reason: String? = nil, kind: String? = nil, messages: [Message]? = nil) {
+            self.id = id; self.status = status; self.startedAt = startedAt; self.endedAt = endedAt; self.reason = reason; self.kind = kind; self.messages = messages
         }
     }
 

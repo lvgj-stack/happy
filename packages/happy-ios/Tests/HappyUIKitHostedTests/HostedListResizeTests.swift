@@ -74,6 +74,11 @@ final class HostedListResizeTests: XCTestCase {
     override func setUp() {
         super.setUp()
         LegacyFonts.registerBundledFonts()
+        // The windows earlier tests hid stay on the scene and turn with it,
+        // half a second or more a turn after a few dozen; let them go.
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows where window.isHidden { window.windowScene = nil }
+        }
         // A test that failed on its side leaves the phone upright again.
         addTeardownBlock { @MainActor in
             guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene, scene.interfaceOrientation != .portrait else { return }
@@ -144,6 +149,9 @@ final class HostedListResizeTests: XCTestCase {
         var found: [String] = []
         func walk(_ view: UIView) {
             guard !view.isHidden, view.alpha > 0.01, !(view is UINavigationBar), !(view is UIToolbar) else { return }
+            // iOS 27 draws a navigation controller's toolbar, its search
+            // field and buttons, in a floating bar of its own.
+            guard !NSStringFromClass(type(of: view)).hasPrefix("_UIFloatingBar") else { return }
             let frame = view.convert(view.bounds, to: window)
             let reads = view is UILabel || view is UITextView || view is UITextField || view is UIControl || view is UIImageView || view is ListRowView
             if reads, frame.width > 1, frame.height > 1, frame.intersects(window.bounds), frame.minX < minX || frame.maxX > maxX {
@@ -222,7 +230,7 @@ final class HostedListResizeTests: XCTestCase {
         print(String(format: "RESIZE_FRAMES %@ first=%.1fms longest=%.1fms frames=%d", label, gaps.first ?? 0, gaps.max() ?? 0, gaps.count))
         let problems = frames.enumerated().flatMap { frame, problems in problems.map { "frame \(frame): \($0)" } }
         XCTAssertEqual(problems.prefix(12), [], "\(label): \(problems.count) problems over \(frames.count) frames")
-        XCTAssertGreaterThan(frames.count, 10, "\(label): too few frames sampled")
+        XCTAssertGreaterThan(frames.count, TestTime.sampled(10), "\(label): too few frames sampled")
     }
 
     /// What the first frame at `width` showed: the frame of the change. A
@@ -455,7 +463,7 @@ final class HostedListResizeTests: XCTestCase {
                     if reading, let read, let now = Self.share(read, list), abs(now.share - read.share) > 0.12 {
                         problems.append("reading \(read.identity) at \(now.share), was \(read.share), frame \(now.frame) top=\(list.viewportInsets.top)")
                     }
-                    if !reading, rows.distanceFromNewest > 1 { problems.append("left the newest row: \(rows.distanceFromNewest)") }
+                    if !reading, rows.distanceFromNewest > 1 { problems.append("left the newest row: \(rows.distanceFromNewest), list \(list.distanceFromBottom ?? -1) following \(list.isFollowingBottom)") }
                     return problems
                 }
                 report("legacy-chat \(reading ? "reading" : "newest") \(name)", list)
@@ -478,22 +486,24 @@ final class HostedListResizeTests: XCTestCase {
 
     typealias Reading = (identity: String, share: CGFloat, top: CGFloat)
 
-    /// The row the reader is on, at the list's reading edge, how much of it
-    /// was past the edge, and the inset over the edge then.
+    /// The row the reader is on, at the list's reading edge (the top
+    /// inset, under the bar: the chats stand the natural way up and keep
+    /// the row there in place), how much of it was past the edge, and the
+    /// inset then.
     private static func readingRow(_ list: UltraListView) -> Reading? {
+        let top = CGFloat(list.viewportInsets.top)
         for index in list.loadedIndexRange {
-            guard let frame = list.settledFrame(at: index), frame.minY <= 0, frame.maxY > 0, frame.height > 0 else { continue }
-            return (list.items[index].identity, -frame.minY / frame.height, CGFloat(list.viewportInsets.top))
+            guard let frame = list.settledFrame(at: index), frame.minY <= top, frame.maxY > top, frame.height > 0 else { continue }
+            return (list.items[index].identity, (top - frame.minY) / frame.height, top)
         }
         return nil
     }
 
-    /// How much of the row being read is past the reading edge now. The
-    /// edge moves with the inset over it, as the list carries the rows
-    /// with a composer that changes height (`compensatesInsetChange`).
+    /// How much of the row being read is past the reading edge now, the
+    /// top inset, which a turned bar moves.
     private static func share(_ read: Reading, _ list: UltraListView) -> (share: CGFloat, frame: CGRect)? {
         guard let index = list.items.firstIndex(where: { $0.identity == read.identity }), let frame = list.settledFrame(at: index) else { return nil }
-        let edge = list.viewportInsets.top - read.top
+        let edge = CGFloat(list.viewportInsets.top)
         return ((edge - frame.minY) / max(1, frame.height), frame)
     }
 
@@ -573,7 +583,7 @@ final class HostedListResizeTests: XCTestCase {
                         let undrawn = Self.undrawn(view.canvas)
                         if !undrawn.isEmpty { problems.append("\(view.row.identity) is not drawn: " + undrawn) }
                     }
-                    if !reading, transcript.distanceFromNewest > 1 { problems.append("left the newest row: \(transcript.distanceFromNewest)") }
+                    if !reading, transcript.distanceFromNewest > 1 { problems.append("left the newest row: \(transcript.distanceFromNewest), list \(list.distanceFromBottom ?? -1) following \(list.isFollowingBottom)") }
                     return problems
                 }
                 print(String(format: "RESIZE_REPORT agent-chat-planning %@ %@ main=%.2fms rows=%d", reading ? "reading" : "newest", name, chat.inPlaceMilliseconds, chat.inPlaceRows))

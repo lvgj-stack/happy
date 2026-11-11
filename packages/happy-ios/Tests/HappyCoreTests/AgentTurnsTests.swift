@@ -49,6 +49,33 @@ final class AgentTurnsTests: XCTestCase {
         XCTAssertFalse(end.afterStep, "after the answer the status is 32 tall")
     }
 
+    /// Quick replies are no answer: closed, the answer keeps the control
+    /// and the replies stay under it, above how the turn ended.
+    func testAFoldedTurnKeepsItsQuickRepliesUnderItsAnswer() {
+        let replies = ChatItem(id: "replies:a2:c", role: .agent, pieces: [.quickReplies(QuickReplies(messageId: "a2", toolCallId: "c", options: ["Yes"]))], delivery: .sent, turn: "r")
+        let items = [user("u", turn: "r"), tool("t1", "exec_command", type: "exec_command", turn: "r"), agent("a2", "Done.", turn: "r"), replies, ended("r", tools: 1)]
+        XCTAssertEqual(TurnFold.fold(items, expanded: []).map(\.id), ["u", "r:trace", "a2", "replies:a2:c", "r:status"])
+    }
+
+    /// A reply steered into the turn answers under the replies; closed,
+    /// the words that offered them stay with them.
+    func testAFoldedTurnKeepsTheWordsThatOfferedItsRepliesWithThem() {
+        let replies = ChatItem(id: "replies:a1:c", role: .agent, pieces: [.quickReplies(QuickReplies(messageId: "a1", toolCallId: "c", options: ["Yes"]))], delivery: .sent, turn: "r")
+        let items = [user("u", turn: "r"), tool("t1", "exec_command", type: "exec_command", turn: "r"), agent("a1", "Go on?", turn: "r"), replies,
+                     user("u2", turn: "r"), agent("a2", "Going.", turn: "r"), ended("r", tools: 1)]
+        XCTAssertEqual(TurnFold.fold(items, expanded: []).map(\.id), ["u", "a1", "replies:a1:c", "u2", "r:trace", "a2", "r:status"])
+    }
+
+    /// What `show_ui` showed stays with the words that brought it, the
+    /// control above them both; the work before them folds.
+    func testAFoldedTurnKeepsWhatItShowedWithTheWordsThatBroughtIt() {
+        let item = AgentWire.MediaItem(kind: "image", name: "a.png", mimeType: "image/png")
+        let shown = ChatItem(id: "m1", role: .agent, pieces: [.mediaRows([Media(toolCallId: "m1", index: 0, item: item)], labels: [nil])], delivery: .sent, turn: "r")
+        let items = [user("u", turn: "r"), tool("t1", "exec_command", type: "exec_command", turn: "r"), agent("a0", "Looking.", turn: "r"),
+                     agent("a1", "The new overview:", turn: "r"), shown, ended("r", tools: 2)]
+        XCTAssertEqual(TurnFold.fold(items, expanded: []).map(\.id), ["u", "r:trace", "a1", "m1", "r:status"])
+    }
+
     /// Open, every step shows and the control rides the turn's first one.
     func testAnOpenTurnShowsEveryStepWithItsControlFirst() {
         let items = [user("u", turn: "r"), tool("t1", "Bash", turn: "r"), agent("a", "Done.", turn: "r"), tool("t2", "Bash", turn: "r"), ended("r", tools: 2)]
@@ -157,7 +184,7 @@ final class AgentTurnsTests: XCTestCase {
         let snapshot = try await next(&updates) { $0.items.count >= 4 }
         XCTAssertEqual(snapshot.items.map(\.id), ["u-r", "m-r", "t1", "m-r/2", "r:status"])
         XCTAssertEqual(snapshot.items[2].role, .tool(.init(name: "exec_command", status: "completed", presentation: AgentWire.Presentation(type: "exec_command", command: "ls"), callId: "t1")))
-        XCTAssertEqual(snapshot.items[4].role, .turnEnd(.init(reason: "completed", durationMs: 12_000, tools: 1, copyText: "Done.")))
+        XCTAssertEqual(snapshot.items[4].role, .turnEnd(.init(reason: "completed", durationMs: 12_000, tools: 1, copyText: "Done.", endedAt: 13_000)))
         XCTAssertEqual(Set(snapshot.items.map(\.turn)), ["r"])
         await conversation.stop()
     }
@@ -177,7 +204,7 @@ final class AgentTurnsTests: XCTestCase {
         XCTAssertEqual(tool.presentation?.operations?.first?.name, "a.swift")
         await engine.spaces.externalEvent(TurnServer.event("run.finished", ["run": .object(["id": .string("live"), "status": .string("completed"), "reason": .string("completed"), "startedAt": .number(1_000), "endedAt": .number(64_000)])]))
         let ended = try await next(&updates) { $0.items.contains { $0.id == "live:status" } }
-        XCTAssertEqual(ended.items.last?.role, .turnEnd(.init(reason: "completed", durationMs: 63_000, tools: 1, copyText: nil)))
+        XCTAssertEqual(ended.items.last?.role, .turnEnd(.init(reason: "completed", durationMs: 63_000, tools: 1, copyText: nil, endedAt: 64_000)))
         await conversation.stop()
     }
 

@@ -107,10 +107,6 @@ actor FakeVaultServer: VaultRoutes {
         return VaultPage(items: items, next: nil)
     }
 
-    func vaultSearch(_ surfaceId: String, query: String) async throws -> (results: [VaultSearchResult], truncated: Bool) {
-        (entries.values.filter { live($0) && $0.name.lowercased().contains(query.lowercased()) }.map { VaultSearchResult(entry: $0, path: "/" + $0.name, match: .name) }, false)
-    }
-
     func vaultVersions(_ surfaceId: String, _ entryId: String, pageCursor: String?) async throws -> VaultPage<VaultVersion> {
         VaultPage(items: (versions[entryId] ?? []).reversed(), next: nil)
     }
@@ -176,9 +172,22 @@ actor FakeVaultServer: VaultRoutes {
         return entry
     }
 
-    func createVaultVersion(_ surfaceId: String, _ entryId: String, uploadId: String?, fromVersion: Int?, ifMatch: String, mutationId: String) async throws -> (entry: VaultEntry, version: VaultVersion?) {
+    /// Answers made, by operation, replayed as the contract says.
+    var operations: [String: (entry: VaultEntry, version: VaultVersion?)] = [:]
+    /// The next new version is made but its answer never arrives.
+    var losingAnswers = 0
+
+    func losing(_ count: Int) { losingAnswers = count }
+    /// Every new version holds what the newest already does, so none is made.
+    var identical = false
+
+    func unchanged() { identical = true }
+
+    func createVaultVersion(_ surfaceId: String, _ entryId: String, uploadId: String?, fromVersion: Int?, operationId: String, ifMatch: String, mutationId: String) async throws -> (entry: VaultEntry, version: VaultVersion?) {
         writes.append("version \(entryId)")
+        if let held = operations["\(entryId)/\(operationId)"], let entry = entries[entryId] { return (entry, held.version) }
         var entry = try check(entryId, ifMatch)
+        if identical { return (entry, nil) }
         var size = entry.size ?? 0
         if let uploadId {
             guard let staged = uploads.removeValue(forKey: uploadId) else { throw AgentClientError.status(404, code: "not_found", message: nil) }
@@ -191,6 +200,11 @@ actor FakeVaultServer: VaultRoutes {
         entry.size = size
         entry.version = version()
         entries[entryId] = entry
+        operations["\(entryId)/\(operationId)"] = (entry, made)
+        if losingAnswers > 0 {
+            losingAnswers -= 1
+            throw URLError(.networkConnectionLost)
+        }
         return (entry, made)
     }
 
@@ -409,15 +423,15 @@ final class VaultLibraryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "the library removes the file once the entry is made")
     }
 
-    func testAFileFoundBySearchInAFolderNeverOpenedCanBeChanged() async throws {
+    func testAFileHomesSearchOpensInAVaultNeverOpenedCanBeChanged() async throws {
         let server = FakeVaultServer(surfaceId: surfaceId)
         await server.seed("f1", "Docs", kind: .folder)
         await server.seed("e1", "plan.md", parent: "f1")
         let library = library(server)
-        let root = await watch(library)
-        try await eventually { root.names == ["Docs"] && !root.state.kept }
-        let found = try await library.search(surfaceId, query: "plan")
-        XCTAssertEqual(found.results.map(\.entry.id), ["e1"])
+        // As Home opens a found file: read where it is, then its preview follows it.
+        let place = try await library.location(surfaceId, "e1", folder: false)
+        let events = await library.entryEvents(surfaceId, "e1", known: place.entry)
+        defer { _ = events }
         try await library.rename(surfaceId, "e1", to: "roadmap.md")
         let name = await server.entries["e1"]?.name
         XCTAssertEqual(name, "roadmap.md")
@@ -436,6 +450,36 @@ final class VaultLibraryTests: XCTestCase {
         XCTAssertEqual(root.names, ["notes.txt"])
         let writes = await server.writes
         XCTAssertEqual(writes, ["version e1"])
+    }
+
+    func testAVersionWhoseAnswerWasLostIsAskedForAgainAndMadeOnce() async throws {
+        let server = FakeVaultServer(surfaceId: surfaceId)
+        await server.seed("e1", "notes.txt")
+        await server.losing(1)
+        let library = library(server)
+        let root = await watch(library)
+        try await eventually { root.names == ["notes.txt"] && !root.state.kept }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("vault-upload-\(UUID().uuidString)")
+        try Data("new words".utf8).write(to: file)
+        let id = await library.upload(surfaceId, parentId: nil, file: file, name: "notes.txt", replacing: "e1")
+        try await eventually { if case .failed = root.state.uploads.first?.phase { true } else { false } }
+        await library.retryUpload(surfaceId, id)
+        try await eventually { root.state.uploads.isEmpty && root.state.entries.first?.latestVersion == 2 }
+        let (writes, made, operations) = (await server.writes, await server.versions["e1"]?.count, await server.operations.count)
+        XCTAssertEqual(writes, ["version e1", "version e1"])
+        XCTAssertEqual(made, 1, "the retry is the same operation, so no second version")
+        XCTAssertEqual(operations, 1)
+    }
+
+    func testARestoreThatMakesNoVersionStillSucceeds() async throws {
+        let server = FakeVaultServer(surfaceId: surfaceId)
+        await server.seed("e1", "notes.txt")
+        await server.unchanged()
+        let library = library(server)
+        let root = await watch(library)
+        try await eventually { root.names == ["notes.txt"] && !root.state.kept }
+        let made = try await library.restoreVersion(surfaceId, "e1", number: 1)
+        XCTAssertNil(made)
     }
 
     func testTheTrashListsItsItemsAndARestoreBringsOneBack() async throws {
@@ -530,7 +574,7 @@ final class VaultRulesTests: XCTestCase {
         XCTAssertEqual(VaultPreviewKind(mediaType: "text/plain", name: "notes.txt", size: 9), .text(language: "plaintext"))
         XCTAssertEqual(VaultPreviewKind(mediaType: "text/plain", name: "huge.log", size: VaultPreviewKind.textLimit + 1), .other)
         XCTAssertEqual(VaultPreviewKind(mediaType: "application/zip", name: "a.zip", size: 9), .other)
-        XCTAssertEqual(VaultPreviewKind(VaultEntry(id: "e", surfaceId: "s", parentId: nil, name: "site", kind: .artifact)), .site)
+        XCTAssertEqual(VaultPreviewKind(VaultEntry(id: "e", surfaceId: "s", parentId: nil, name: "launch.artifact", kind: .artifact)), .app)
     }
 
     func testAFreeNameNumbersBeforeTheExtension() {
@@ -539,11 +583,21 @@ final class VaultRulesTests: XCTestCase {
         XCTAssertEqual(VaultReducer.free("Notes", among: ["notes"]), "Notes 2")
     }
 
-    func testAFileNamedArtifactUploadsAsASite() {
+    func testAFileNamedArtifactUploadsAsAnApp() {
         XCTAssertEqual(VaultEntry.kind(named: "launch.artifact"), .artifact)
         XCTAssertEqual(VaultEntry.kind(named: "Launch.ARTIFACT"), .artifact)
         XCTAssertEqual(VaultEntry.kind(named: "launch.zip"), .file)
         XCTAssertEqual(VaultEntry.kind(named: ".artifact"), .file)
+    }
+
+    func testAnAppShowsWithoutItsSuffixAndKeepsIt() {
+        XCTAssertEqual(VaultEntry(id: "e", surfaceId: "s", parentId: nil, name: "launch.artifact", kind: .artifact).shownName, "launch")
+        XCTAssertEqual(VaultEntry.shownName("Launch.ARTIFACT"), "Launch")
+        XCTAssertEqual(VaultEntry.shownName("notes.txt"), "notes.txt")
+        XCTAssertEqual(VaultEntry.shownName(".artifact"), ".artifact")
+        XCTAssertEqual(VaultEntry.appName("launch again"), "launch again.artifact")
+        XCTAssertEqual(VaultEntry.appName("launch.artifact"), "launch.artifact")
+        XCTAssertEqual(VaultReducer.free("launch.artifact", among: ["launch.artifact"]), "launch 2.artifact")
     }
 
     func testAVaultSurfaceWearsItsOwnGlyph() {
@@ -562,8 +616,6 @@ final class VaultRulesTests: XCTestCase {
         XCTAssertEqual(unknown.kind, .other("tagged"))
         let version = try JSONDecoder().decode(VaultVersion.self, from: Data(#"{"fileId":"e","surfaceId":"s","number":3,"size":48213,"sha256":"2c26","artifact":null,"pinned":false,"restoredFrom":null,"createdAt":1,"actor":{"userId":null,"agentId":"a9"},"source":"tool"}"#.utf8))
         XCTAssertEqual(version.entryId, "e")
-        let found = try JSONDecoder().decode(VaultSearchResult.self, from: Data(#"{"item":\#(json),"path":"/Reports/summary.pdf","match":"content","innerPath":null,"line":4,"snippet":"Q3"}"#.utf8))
-        XCTAssertEqual(found.entry.id, entry.id)
         let trash = try JSONDecoder().decode(VaultTrashItem.self, from: Data(#"{"item":\#(json),"path":"/Reports"}"#.utf8))
         XCTAssertEqual(trash.entry.name, "summary.pdf")
         let folder = try JSONDecoder().decode(VaultEntry.self, from: Data(#"{"id":"f","surfaceId":"s","parentId":null,"name":"Reports","kind":"folder","createdAt":1,"createdBy":{"userId":"u","agentId":null},"updatedAt":1,"updatedBy":{"userId":"u","agentId":null},"deletedAt":null,"version":"v"}"#.utf8))

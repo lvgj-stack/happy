@@ -20,6 +20,8 @@ actor ArtifactCatalogDaemon: AgentTransport {
         /// `wide` or `square`: the picture is the cover, of that shape.
         var aspect: String? = nil
         var deleted = false
+        /// The daemon made a still of the cover (`cover.preview`).
+        var preview = false
     }
 
     var items: [Item]
@@ -39,7 +41,7 @@ actor ArtifactCatalogDaemon: AgentTransport {
             let list = items.map(object).joined(separator: ",")
             return HTTP1Response(status: 200, body: Data(#"{"artifacts":[\#(list)],"nextPageCursor":null,"cursor":"c1"}"#.utf8))
         }
-        if path.hasPrefix("/v0/artifacts/"), path.contains("/files/") {
+        if path.hasPrefix("/v0/artifacts/"), path.contains("/files/") || path.contains("/previews/") {
             fileReads.append(path)
             guard let item = items.first(where: { path.hasPrefix("/v0/artifacts/\($0.id)/") }), let data = item.picture else { return HTTP1Response(status: 404, body: Data("{}".utf8)) }
             return ArtifactDaemon.serve(.init(path: "picture.png", mimeType: "image/png", data: data), range: headers["Range"])
@@ -57,14 +59,15 @@ actor ArtifactCatalogDaemon: AgentTransport {
         let size = item.type == "html" ? 100 : item.picture?.count ?? 100
         let cover = item.aspect.map { aspect in
             let side = aspect == "wide" ? #""width":1600,"height":900"# : #""width":1200,"height":1200"#
-            return ##","cover":{"path":"picture.png","mimeType":"image/png",\##(side),"aspect":"\##(aspect)"},"background":"#0b1f33""##
+            let preview = item.preview ? #","preview":{"width":320,"height":180}"# : ""
+            return ##","cover":{"path":"picture.png","mimeType":"image/png",\##(side),"aspect":"\##(aspect)"\##(preview)},"background":"#0b1f33""##
         } ?? ""
         return #"{"id":"\#(item.id)","type":"\#(item.type)","title":"\#(item.title)","status":"\#(item.deleted ? "deleted" : "active")","latestVersion":2,"entry":{"path":"\#(path)","mimeType":"\#(mime)","size":\#(size),"sha256":"0"},"fileCount":1,"live":null,"createdAt":\#(ms),"updatedAt":\#(ms)\#(cover)}"#
     }
 }
 
 /// The Artifacts screen home's fixed row opens: home's grouped cards split
-/// by date, a picture's thumbnail, the bar's search, a pull's refresh, the
+/// by date, a picture's thumbnail, the bar's search, a catalog read again, the
 /// list kept for when the computer is away, and a row opening the viewer.
 /// Pictures, light and dark, go to `.context/evidence/artifacts`.
 @MainActor
@@ -130,7 +133,7 @@ final class HostedArtifactsListTests: XCTestCase {
         let today = min(Date(), days(0, hours: 9))
         return [
             .init(id: "a1", type: "markdown", title: "Q3 roadmap", updatedAt: today, picture: nil),
-            .init(id: "a2", type: "image", title: "Team offsite photo", updatedAt: today.addingTimeInterval(-60), picture: picture, aspect: "wide"),
+            .init(id: "a2", type: "image", title: "Team offsite photo", updatedAt: today.addingTimeInterval(-60), picture: picture, aspect: "wide", preview: true),
             .init(id: "a3", type: "html", title: "Pricing page prototype", updatedAt: days(1, hours: 16), picture: square, aspect: "square"),
             .init(id: "a4", type: "markdown", title: "Interview notes with the design partner, the longer write-up that wraps", updatedAt: days(3, hours: 11), picture: nil),
             .init(id: "gone", type: "image", title: "Old mockup", updatedAt: days(2, hours: 9), picture: sketch, deleted: true),
@@ -236,6 +239,9 @@ final class HostedArtifactsListTests: XCTestCase {
         let files = await daemon.fileReads
         XCTAssertEqual(files.count, 3, "each read once, the tombstone's never: \(files)")
         XCTAssertFalse(files.contains { $0.contains("/gone/") })
+        XCTAssertTrue(files.contains("/v0/artifacts/a2/versions/2/previews/picture.png"), "a cover with a still loads the still: \(files)")
+        XCTAssertFalse(files.contains("/v0/artifacts/a2/versions/2/files/picture.png"), "never the whole cover")
+        XCTAssertTrue(files.contains("/v0/artifacts/a3/versions/2/files/picture.png"), "one without a still loads the cover")
         XCTAssertNil(cover("a1"), "a document shows its kind's glyph")
         XCTAssertTrue(overlays("a1").isEmpty)
         XCTAssertTrue(overlays("a3").allSatisfy { $0.kind == ArtifactListItems.coverKind })
@@ -274,7 +280,9 @@ final class HostedArtifactsListTests: XCTestCase {
         try await wait("everything again") { rows(screen).count == 7 }
     }
 
-    func testAPullReadsTheCatalogAgainAndARowOpensTheViewer() async throws {
+    /// No pull to refresh: the catalog read again, as after a gap, brings
+    /// what changed, and the list offers no spinner.
+    func testAReadAgainBringsNewArtifactsAndARowOpensTheViewer() async throws {
         let daemon = ArtifactCatalogDaemon(items: Self.fixture())
         let opened = try await open(daemon)
         let screen = opened.screen
@@ -283,10 +291,9 @@ final class HostedArtifactsListTests: XCTestCase {
         var items = Self.fixture()
         items.insert(.init(id: "new", type: "markdown", title: "Fresh report", updatedAt: Date(), picture: nil), at: 0)
         await daemon.set(items: items)
-        screen.list.refreshing = true
-        screen.list.onRefresh?()
+        await opened.session.engine.artifacts.refresh()
         try await wait("the new artifact") { rows(screen).first == "new" }
-        try await wait("the spinner to go") { !screen.list.refreshing }
+        XCTAssertFalse(screen.list.subviews.contains { $0 is UIActivityIndicatorView }, "no pull spinner")
 
         screen.list.onSelect?("a3")
         try await wait("the viewer") { opened.navigation.topViewController is ArtifactViewController }
@@ -309,10 +316,37 @@ final class HostedArtifactsListTests: XCTestCase {
         XCTAssertEqual(rows(again), rows(opened.screen))
     }
 
+    /// The tickets stand over the words in the middle of the screen and
+    /// play once; a read that finds nothing new keeps the same picture,
+    /// resting.
     func testAComputerWithNoArtifactsSaysSo() async throws {
-        let opened = try await open(ArtifactCatalogDaemon(items: []), style: .dark)
-        try await wait("the empty note") { opened.screen.list.items.map(\.accessibilityLabel) == [Strings.Artifacts.empty] }
-        capture(opened.window, "artifacts-empty")
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let opened = try await open(ArtifactCatalogDaemon(items: []), style: style)
+            try await wait("the empty note") { opened.screen.list.items.map(\.accessibilityLabel) == [Strings.Artifacts.empty] }
+            // In the middle of what the list shows, not at its top.
+            let list = opened.screen.list
+            try await wait("the note to fill the list") {
+                list.items.first?.size.height == list.bounds.height - list.contentInsets.top - list.contentInsets.bottom
+            }
+            let art = try XCTUnwrap(opened.screen.list.items.first?.overlays.first)
+            XCTAssertEqual(art.kind, CardOverlay.scene)
+            XCTAssertEqual(art.key, StateScene.tickets.rawValue)
+            var scene: StateSceneView?
+            try await wait("the tickets") {
+                scene = opened.screen.list.rowView("artifacts:note")?.overlay(art.key) as? StateSceneView
+                return scene?.isLoaded == true
+            }
+            XCTAssertEqual(scene?.scene, .tickets)
+            XCTAssertEqual(scene?.frame, art.frame)
+            try await wait("its one play") { (scene?.progress ?? 0) > 0.999 && scene?.isAnimating == false }
+            capture(opened.window, "artifacts-empty")
+
+            await opened.session.engine.artifacts.refresh()
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertTrue(opened.screen.list.rowView("artifacts:note")?.overlay(art.key) === scene, "the same picture")
+            XCTAssertEqual(scene?.isAnimating, false, "it did not play again")
+            opened.window.isHidden = true
+        }
     }
 }
 #endif

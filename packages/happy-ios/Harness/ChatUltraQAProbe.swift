@@ -1065,9 +1065,15 @@ final class ChatUltraQAProbe: NSObject {
         case .openArtifact(let artifact): "artifact:\(artifact.id)"
         case .toggleTurn(let turn): "turn:\(turn)"
         case .openURL(let url): "url:\(url.prefix(60))"
+        case .linkButton(let url, _): "linkButton:\(url.prefix(60))"
         case .copyMenu: "copyMenu"
         case .selectable: "selectable"
         case .markdownSelectable: "markdownSelectable"
+        case .ui(let tap):
+            switch tap.kind {
+            case .card(let shown, _): "ui:\(shown.offer.key)"
+            case .reply(let replies, let index): "reply:\(replies.messageId):\(index)"
+            }
         }
     }
 

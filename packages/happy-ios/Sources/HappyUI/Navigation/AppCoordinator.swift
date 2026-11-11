@@ -1,8 +1,16 @@
 #if canImport(UIKit)
+import HappyAnalytics
 import HappyCore
 import HappyLayout
 import HappyWire
 import UIKit
+
+/// A flow that adds an account and ends by opening it: the coordinator
+/// puts the new account's root in place under it, then dismisses it if it
+/// was presented, or dissolves into the new root if it was pushed. The flow
+/// doesn't dismiss or pop itself once the account it added is open.
+@MainActor
+protocol AccountAddingFlow: UIViewController {}
 
 /// Owns the window's navigation stack and swaps its root when the account
 /// signs in or out. Deep links (`happy://terminal?…`) land here too.
@@ -61,16 +69,16 @@ public final class AppCoordinator {
         // opens; with none, a paired computer rather than Welcome.
         let v2 = Preference(variant: context.variant)
         context.account.fallsBackToAgentConnection = true
-        PairingAnalytics.shared.variant = context.variant
+        Analytics.shared.follow(context.account)
         Task { @MainActor [weak self] in
             guard let account = self?.context.account else { return }
             // The Happy account's filter showed a computer's V2: that
             // computer is home now, from the first screen.
             await account.restore(openingAgentConnection: v2.takeFilterChoice(), preferred: v2.agentConnectionID)
+            // Analytics waits for every signed-in account's opt-out, read off the main thread.
+            Task { await Analytics.shared.accountsRestored() }
             self?.show(account.state)
             self?.accountRestored = true
-            // Only now, with the accounts read, is it known whose subscription it is.
-            Offers.shared.follow(account)
             self?.openPendingLink()
             self?.openPendingInstanceLink()
             self?.openNotificationSession()
@@ -226,13 +234,17 @@ public final class AppCoordinator {
     }
 
     /// The linked entity, pushed over its connection's home once that is
-    /// the root. An artifact or a conversation opens; anything else
-    /// (a workspace, a file, a service) shows that connection's home.
+    /// the root. An artifact, a conversation or a settings page opens;
+    /// anything else (a workspace, a file, a service) shows that
+    /// connection's home.
     private func openInstanceTarget() {
         guard let target = instanceTarget, case .agentConnection(let shown) = context.account.state, shown.id == target.connection,
               shell.stack.first is AgentHomeViewController, let session = Session.session(for: target.connection, context: context) else { return }
         instanceTarget = nil
         shell.presentedViewController?.dismiss(animated: false)
+        if case .settings(let page) = target.link.target, let top = shell.topViewController {
+            return SettingsLinks.open(page, options: target.link.providerOptions, session: session, from: top)
+        }
         guard case .reference(let reference) = target.link.target, let navigation = shell.topViewController?.navigationController else { return }
         switch reference.kind {
         case .artifact:
@@ -279,7 +291,6 @@ public final class AppCoordinator {
         let session: AccountSession?
         if case .signedIn(let value) = state { session = value } else { session = nil }
         VoiceCoordinator.shared.accountDidChange(to: session)
-        if accountRestored { Offers.shared.tell(context.account) }
         let identity = session.map(ObjectIdentifier.init)
         let pending = context.account.pendingServerConfirmation
         let agentConnectionID = context.account.agentConnections.activeID
@@ -371,11 +382,23 @@ public final class AppCoordinator {
         let kept = settings.flatMap { settings in
             presented == nil && (context.account.agentConnections.active != nil || session != nil) ? settings : nil
         }
-        shell.presentedViewController?.dismiss(animated: false)
+        // A flow that added this account, full screen over the old home,
+        // goes away over the new one: the old home is never seen between.
+        let addingFlow = presented.flatMap { $0 is AccountAddingFlow ? $0 : nil }
+        if addingFlow == nil { shell.presentedViewController?.dismiss(animated: false) }
+        // One pushed on the stack ends as a switch does, in a dissolve, not
+        // a push forward.
+        let pushedFlow = presented == nil && current.last is AccountAddingFlow
         let stack = [root] + [kept].compactMap { $0 }
-        // Beside the sidebar, the whole split dissolves into the new
-        // account's: its home in the sidebar, nothing open beside it.
-        if animated, kept == nil, current.count == 1 || shell.isExpanded, shell.view.window != nil {
+        if let addingFlow {
+            UIView.performWithoutAnimation {
+                shell.setStack(stack, animated: false)
+                shell.view.layoutIfNeeded()
+            }
+            addingFlow.dismiss(animated: animated)
+        } else if animated, kept == nil, current.count == 1 || shell.isExpanded || pushedFlow, shell.view.window != nil {
+            // Beside the sidebar, the whole split dissolves into the new
+            // account's: its home in the sidebar, nothing open beside it.
             // Home itself on screen: the new one dissolves in where it is, so
             // the header and the toolbar stay put and only what's in them
             // changes. A push here read as going somewhere, not as switching.

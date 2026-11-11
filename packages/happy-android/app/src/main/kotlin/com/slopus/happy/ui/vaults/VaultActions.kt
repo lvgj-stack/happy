@@ -1,6 +1,7 @@
 package com.slopus.happy.ui.vaults
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
@@ -10,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,7 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.slopus.happy.R
 import com.slopus.happy.agent.AgentApiException
+import com.slopus.happy.agent.AgentClient
 import com.slopus.happy.agent.AgentSession
+import com.slopus.happy.agent.VaultAccess
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.slopus.happy.conversation.Conversation
 import com.slopus.happy.conversation.MediaFiles
 import com.slopus.happy.ui.components.Alert
@@ -46,8 +51,8 @@ import com.slopus.happy.ui.conversation.problemText
 import com.slopus.happy.vaults.VaultClient
 import com.slopus.happy.vaults.VaultDownloads
 import com.slopus.happy.vaults.VaultItem
+import com.slopus.happy.vaults.VaultNames
 import com.slopus.happy.vaults.VaultUploadSource
-import com.slopus.happy.vaults.VaultUploads
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +68,7 @@ object VaultActionTags {
 
 /**
  * Everything a person can do to a vault's entries, from any of its screens
- * (a folder's rows and bar, a file's bar, search, the Trash): each asks
+ * (a folder's rows and bar, a file's bar, the Trash): each asks
  * what it needs (a name, a folder, a confirmation, a place on the phone),
  * changes the vault and hands the entry the daemon answered with to the
  * vault's folders ([com.slopus.happy.vaults.Vaults.known]), so they show
@@ -89,7 +94,23 @@ class VaultActions internal constructor(
     internal var moving by mutableStateOf<VaultItem?>(null)
     internal var deleting by mutableStateOf<VaultItem?>(null)
     internal var creating by mutableStateOf<Folder?>(null)
-    internal var failure by mutableStateOf<String?>(null)
+    /** A failure's dialog: [title] over [message]. A name the vault keeps for apps is a rule, not something broken. */
+    internal class Failure(val message: String, @StringRes val title: Int = R.string.vaults_failed)
+
+    internal var failure by mutableStateOf<Failure?>(null)
+
+    /** The person may change this vault: it lets them write, and their role writes content. */
+    internal var writable by mutableStateOf(false)
+
+    /** This vault is the team's Policy vault, whose places stay put ([PolicyPlaces]). */
+    internal var policy by mutableStateOf(false)
+
+    /** The folder whose entries this screen shows: its name, and whether it is at the root. Null at the root. */
+    internal var within by mutableStateOf<Pair<String, Boolean>?>(null)
+
+    /** Whether [entry] may be renamed, moved or deleted. */
+    fun canChange(entry: VaultItem): Boolean =
+        writable && !(policy && PolicyPlaces.fixed(entry, within?.first, within?.second == true))
     internal var transfer by mutableStateOf<Transfer?>(null)
     internal var pickFiles: (String?) -> Unit = {}
     internal var pickMedia: (String?) -> Unit = {}
@@ -105,30 +126,40 @@ class VaultActions internal constructor(
     fun uploadFiles(parentId: String?) = pickFiles(parentId)
     fun uploadMedia(parentId: String?) = pickMedia(parentId)
     fun replace(entry: VaultItem) = pickReplacement(entry)
-    fun history(entry: VaultItem) = open(VaultHistoryRoute(session.connectionId, surfaceId, entry.id, entry.isFolder, entry.name))
+    fun history(entry: VaultItem) = open(VaultHistoryRoute(session.connectionId, surfaceId, entry.id, entry.isFolder, entry.shownName))
 
     /** Saves [entry] (a file's [version], null the latest) where the person picks, through the system's Save to. */
     fun save(entry: VaultItem, version: Int? = null) = pickPlace(entry, version)
 
     fun restore(entry: VaultItem) = change(entry) { routes.restore(it) }
 
-    /** Makes [version]'s content the newest version again; history only grows. */
-    fun restoreVersion(entry: VaultItem, version: Int) = change(entry) { routes.newVersion(it, fromVersion = version).first }
+    /** Makes [version]'s content the newest version again; history only grows. One `operationId` for the tap, kept on its retry. */
+    fun restoreVersion(entry: VaultItem, version: Int) {
+        val operationId = AgentClient.newId()
+        change(entry) { routes.newVersion(it, fromVersion = version, operationId = operationId).first }
+    }
 
     internal fun created(parentId: String?, name: String) {
+        if (VaultNames.isArtifact(name.trim())) {
+            failure = Failure(resources.getString(R.string.vaults_name_reserved), R.string.vaults_name_refused)
+            return
+        }
         scope.launch {
             try {
                 session.vaults.known(routes.createFolder(surfaceId, parentId, name.trim()))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, name.trim())
+                failure = Failure(describe(e, name.trim()))
             }
         }
     }
 
     internal fun renamed(entry: VaultItem, name: String) {
-        val next = newName(entry, name)
+        val next = newName(entry, name) ?: run {
+            failure = Failure(resources.getString(R.string.vaults_name_reserved), R.string.vaults_name_refused)
+            return
+        }
         if (next == entry.name) return
         change(entry, next) { routes.update(it, name = next) }
     }
@@ -157,13 +188,13 @@ class VaultActions internal constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, name)
+                failure = Failure(describe(e, name))
             }
         }
     }
 
     private fun describe(e: Exception, name: String): String = when {
-        e is AgentApiException && e.code == "name_taken" -> resources.getString(R.string.vaults_name_taken, name)
+        e is AgentApiException && e.code == "name_taken" -> resources.getString(R.string.vaults_name_taken, VaultNames.shown(name))
         e is AgentApiException && e.status == 409 -> resources.getString(R.string.vaults_changed_elsewhere)
         else -> resources.problemText(Conversation.describe(e))
     }
@@ -187,16 +218,12 @@ class VaultActions internal constructor(
                     target
                 }
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.conversation.media", file)
-                val send = Intent(Intent.ACTION_SEND)
-                    .setType(VaultDownloads.mediaType(entry))
-                    .putExtra(Intent.EXTRA_STREAM, uri)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 transfer = null
-                context.startActivity(Intent.createChooser(send, name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                context.startActivity(Intent.createChooser(vaultShare(uri, entry), entry.shownName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, name)
+                failure = Failure(describe(e, name))
             } finally {
                 transfer = null
             }
@@ -228,12 +255,12 @@ class VaultActions internal constructor(
                             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
                 } catch (_: ActivityNotFoundException) {
-                    failure = resources.getString(R.string.vaults_no_app)
+                    failure = Failure(resources.getString(R.string.vaults_no_app))
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, name)
+                failure = Failure(describe(e, name))
             } finally {
                 transfer = null
             }
@@ -257,7 +284,7 @@ class VaultActions internal constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, name)
+                failure = Failure(describe(e, name))
             } finally {
                 transfer = null
             }
@@ -277,7 +304,7 @@ class VaultActions internal constructor(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    failure = describe(e, "")
+                    failure = Failure(describe(e, ""))
                     continue
                 }
                 session.vaults.uploads.add(surfaceId, parentId, source)
@@ -293,16 +320,35 @@ class VaultActions internal constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failure = describe(e, entry.name)
+                failure = Failure(describe(e, entry.name))
             }
         }
     }
 }
 
-/** [typed] as [entry]'s new name: an artifact's keeps its ".artifact" suffix even when it was typed without it. */
-internal fun newName(entry: VaultItem, typed: String): String {
+/**
+ * [entry]'s file at [uri] for the share sheet. The file keeps its own name
+ * (an app's `.artifact`), while the title the sheet and the receiving app
+ * show is the name as people know it, as iOS's link metadata does.
+ */
+internal fun vaultShare(uri: Uri, entry: VaultItem): Intent = Intent(Intent.ACTION_SEND)
+    .setType(VaultDownloads.mediaType(entry))
+    .putExtra(Intent.EXTRA_STREAM, uri)
+    .putExtra(Intent.EXTRA_TITLE, entry.shownName)
+    .apply { clipData = ClipData(entry.shownName, arrayOf(VaultDownloads.mediaType(entry)), ClipData.Item(uri)) }
+    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+/**
+ * [typed] as [entry]'s new name. An app's is typed without its ".artifact",
+ * which it keeps unseen; a folder's or plain file's can't take one (null).
+ */
+internal fun newName(entry: VaultItem, typed: String): String? {
     val name = typed.trim()
-    return if (entry.isArtifact && !VaultUploads.isArtifact(name)) name + VaultUploads.ARTIFACT_SUFFIX else name
+    return when {
+        entry.isArtifact -> if (name == entry.shownName) entry.name else VaultNames.appName(name)
+        VaultNames.isArtifact(name) -> null
+        else -> name
+    }
 }
 
 /**
@@ -351,6 +397,10 @@ fun rememberVaultActions(session: AgentSession, surfaceId: String, open: (Any) -
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = remember(session, surfaceId) { VaultActions(session, surfaceId, scope, context, resources, open) }
+    val permissions by session.permissions.collectAsStateWithLifecycle()
+    val surface by remember(session, surfaceId) { session.surface(surfaceId) }.collectAsStateWithLifecycle(session.surfaces.value[surfaceId])
+    actions.writable = permissions.canWrite && surface?.access == VaultAccess.Write
+    actions.policy = surface?.policyVault == true
     var uploadInto by remember { mutableStateOf<VaultActions.Folder?>(null) }
     var replacing by remember { mutableStateOf<VaultItem?>(null) }
     var placing by remember { mutableStateOf<Pair<VaultItem, Int?>?>(null) }
@@ -374,7 +424,7 @@ fun rememberVaultActions(session: AgentSession, surfaceId: String, open: (Any) -
     fun launching(block: () -> Unit) = try {
         block()
     } catch (_: ActivityNotFoundException) {
-        actions.failure = unavailable
+        actions.failure = VaultActions.Failure(unavailable)
     }
     actions.pickFiles = { parentId -> uploadInto = VaultActions.Folder(parentId); launching { files.launch(arrayOf("*/*")) } }
     actions.pickMedia = { parentId ->
@@ -408,7 +458,7 @@ fun VaultActionsHost(actions: VaultActions) {
         PromptModal(
             Prompt(
                 title = stringResource(R.string.vaults_rename),
-                defaultValue = entry.name,
+                defaultValue = entry.shownName,
                 confirmText = stringResource(R.string.vaults_rename),
                 allowBlank = false,
             ) { name -> if (name != null) actions.renamed(entry, name) },
@@ -424,7 +474,7 @@ fun VaultActionsHost(actions: VaultActions) {
     actions.deleting?.let { entry ->
         HappyAlert(
             Alert(
-                title = stringResource(R.string.vaults_delete_title, entry.name),
+                title = stringResource(R.string.vaults_delete_title, entry.shownName),
                 message = stringResource(if (entry.isFolder) R.string.vaults_delete_folder_message else R.string.vaults_delete_message),
                 buttons = listOf(
                     AlertButton(stringResource(R.string.common_cancel)),
@@ -439,7 +489,7 @@ fun VaultActionsHost(actions: VaultActions) {
         AlertDialog(
             onDismissRequest = {},
             modifier = Modifier.testTag(VaultActionTags.TRANSFER),
-            title = { Text(stringResource(R.string.vaults_downloading, transfer.name)) },
+            title = { Text(stringResource(R.string.vaults_downloading, VaultNames.shown(transfer.name))) },
             text = {
                 Column {
                     val total = transfer.total
@@ -456,10 +506,26 @@ fun VaultActionsHost(actions: VaultActions) {
             },
         )
     }
-    actions.failure?.let { reason ->
+    actions.failure?.let { failure ->
         HappyAlert(
-            Alert(stringResource(R.string.vaults_failed), reason.ifEmpty { null }, listOf(AlertButton(stringResource(R.string.common_ok)))),
+            Alert(stringResource(failure.title), failure.message.ifEmpty { null }, listOf(AlertButton(stringResource(R.string.common_ok)))),
             onDismiss = { actions.failure = null },
         )
+    }
+}
+
+/**
+ * The Policy vault's places that stay as they are: its `Global` and
+ * `Security` folders at the root, and the one document each keeps, the
+ * team's instructions and security rules. Known by name and parent: the
+ * server gives them no marks of their own.
+ */
+internal object PolicyPlaces {
+    private val documents = mapOf("Global" to "AGENTS.md", "Security" to "SECURITY.md")
+
+    /** Whether [entry] is one, in the folder named [parent] ([parentAtRoot] whether that folder is at the root). */
+    fun fixed(entry: VaultItem, parent: String?, parentAtRoot: Boolean): Boolean = when {
+        entry.parentId == null -> entry.isFolder && entry.name in documents
+        else -> entry.isFile && parentAtRoot && documents[parent] == entry.name
     }
 }

@@ -13,8 +13,14 @@ window, `ChatRowPlan` measurements and changesets. The composer,
 permissions, question forms, copy menus, links and history pager keep their
 controller actions.
 
-`ChatUltraListAdapter` uses `UltraListView(engineMode: .keyframe)` with
-inverted content and inverted rows (`ChatListView.flip`). `NodeRow` prepares
+`ChatUltraListAdapter` uses `UltraListView(engineMode: .keyframe)` standing
+the natural way up, oldest row at the top, with bottom gravity
+(`ListBottomGravity`): the list rests on its newest row, follows a reply
+streaming there by two lines of body text (`ChatFollow`, `isStreaming`) and
+shows a message that arrives finished whole. The person's own newest message,
+last at the foot (`ChatRowPlan.mine`: on its way, waiting or taken, and the
+footer under it in the relay chat), stays on the composer while what is above
+it grows, until a drag away or a row under it. `NodeRow` prepares
 and draws static boxes, text and icons in the library's bounded preparation
 window. TextKit drawing and link hit testing share a lock because they can
 run on different queues. Drawings resolve the captured appearance explicitly
@@ -34,7 +40,26 @@ newest edge flies in from the composer (`ChatSendFlight`, see
 docs/telegram-notes.md §7). The list veils the row the flight waits for from
 the pass that inserts it, and that pass uses the flight's curve. The row is
 unveiled in the transaction where the copy goes. Every other pass keeps its
-own transition.
+own transition. A quick reply tapped at the newest edge flies the same way,
+from its pill instead of the composer (`ChatSendFlight.source(pill:)`): the
+bubble grows from the pill, the words leave it, and a draft in the composer
+stays where it is.
+
+Quick replies (happy-agent's Chat UI) are a row of their own under the words
+that offered them (`Conversation.placeQuickReplies`), so what comes later in
+the turn, a steer and its answer, goes under them and never moves them. The
+pills' frames read only their labels (`ChatUiLayout.replies`), so the sent
+one's highlight and the stack going quiet are a drawn state of the same row:
+one row reconfigured at the same height, and the send's row inserted
+(`ChatUiTests`' changeset assertions). A folded turn keeps the replies and
+the words above them. VoiceOver reads each pill and each card button as a
+button of its own (`ChatRowPlan.controls`): the sent pill selected, one
+that can't be used now dimmed. The stack's width is the widest option's
+own, measured in the same off-main pass as its height.
+
+A `media` component's frames come from its items' stated sizes alone
+(`MediaRows`, the rule happy-agent's `layoutMedia` gives every client), so
+a picture loading never moves the row; it covers its tile.
 
 The agent's newest words come out a character at a time as they stream
 (`ChatRevealDriver`, see docs/telegram-notes.md §8). A revealing row is as

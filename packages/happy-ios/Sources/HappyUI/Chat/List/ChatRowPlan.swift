@@ -27,6 +27,10 @@ final class ChatRowPlan: @unchecked Sendable {
     let toggles: String?
     /// The person's own message: what its send transition flies in.
     let flight: ChatRowFlight?
+    /// The person's own message, on its way, waiting or taken, whether or
+    /// not it flies in: the newest of them, last, stays on the composer
+    /// while what is above it grows.
+    let mine: Bool
     /// An agent's words, which may still be arriving: shown a character at
     /// a time as they grow (`ChatRevealDriver`).
     let revealable: Bool
@@ -34,8 +38,11 @@ final class ChatRowPlan: @unchecked Sendable {
     /// The words a person can select once the message is lifted, and the
     /// whole message as Copy copies it; nil where there are none.
     let selection: ChatSelectable?
+    /// Drawn controls VoiceOver reads and presses one by one, after the
+    /// row's words.
+    let controls: [ChatControl]
 
-    init(id: String, size: CGSize, items: [ChatDrawItem], hits: [ChatHit] = [], alpha: CGFloat = 1, accessibilityLabel: String? = nil, proposals: [(artifactId: String, layout: SidebarProposalLayout, frame: CGRect)] = [], toggles: String? = nil, flight: ChatRowFlight? = nil, revealable: Bool = false, selection: ChatSelectable? = nil) {
+    init(id: String, size: CGSize, items: [ChatDrawItem], hits: [ChatHit] = [], alpha: CGFloat = 1, accessibilityLabel: String? = nil, proposals: [(artifactId: String, layout: SidebarProposalLayout, frame: CGRect)] = [], toggles: String? = nil, flight: ChatRowFlight? = nil, mine: Bool = false, revealable: Bool = false, selection: ChatSelectable? = nil, controls: [ChatControl] = []) {
         self.id = id
         self.size = size
         self.items = items
@@ -45,8 +52,10 @@ final class ChatRowPlan: @unchecked Sendable {
         self.proposals = proposals
         self.toggles = toggles
         self.flight = flight
+        self.mine = mine
         self.revealable = revealable
         self.selection = selection
+        self.controls = controls
     }
 
     /// Where its words are, in reading order, for a revealable plan. Worked
@@ -224,6 +233,9 @@ struct ChatMedia: Equatable, Sendable {
     var label: String
     /// Still going to the computer: its ring.
     var upload: ChatUpload? = nil
+    /// It fills its tile, cropped, as a `media` component's items do,
+    /// rather than fitting inside it.
+    var covers = false
 }
 
 /// A picture or video of a message on its way: how far it is lives on
@@ -288,6 +300,9 @@ enum ChatRowAction: Equatable, Sendable {
     case openFile(String)
     /// A web address a tool call's screen shows.
     case openURL(String)
+    /// A Happy link shown as a button (API.md, "Buttons"): opens as its
+    /// link would; `label` is what it says.
+    case linkButton(url: String, label: String)
     case option(String)
     case retry(localId: String)
     /// A sending picture's cross: takes it out of message `messageId`. A
@@ -313,6 +328,8 @@ enum ChatRowAction: Equatable, Sendable {
     case openArtifact(Artifact)
     /// A finished V2 turn's "View traces" / "Hide traces", by its run.
     case toggleTurn(String)
+    /// A press on a chat UI component.
+    case ui(ChatUiTap)
 
     // Long presses
 
@@ -331,6 +348,16 @@ struct ChatPermissionTap: Equatable, Sendable {
     var permissionId: String
     var kind: PermissionButton.Kind
     var reply: PermissionReply
+}
+
+/// A control drawn in a row (a quick reply, a card's button), as VoiceOver
+/// has it: where it is in row coordinates, what it says, whether it is the
+/// one chosen, and what pressing it does (nil: it can't be used now).
+struct ChatControl {
+    var frame: CGRect
+    var label: String
+    var selected = false
+    var action: ChatRowAction?
 }
 
 struct ChatHit {
