@@ -34,4 +34,5 @@
     <string name="voice_microphone_title">需要麥克風權限</string>
     <string name="voice_microphone_ask">Happy 需要存取麥克風才能進行語音聊天。出現提示時請允許。</string>
     <string name="voice_microphone_settings">Happy 需要存取麥克風才能進行語音聊天。請在裝置設定中開啟麥克風權限。</string>
+    <string name="android_session_list_harness_icons_description">在工作階段標題旁顯示 harness 圖示</string>
 </resources>

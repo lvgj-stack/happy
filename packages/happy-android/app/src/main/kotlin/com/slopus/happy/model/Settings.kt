@@ -72,8 +72,8 @@ data class Settings(
     val avatarStyle: String = "brutalist",
     val avatarMonochrome: Boolean = false,
     val sessionListGrouping: SessionListGrouping = SessionListGrouping.Flat,
-    /** Harness badges in the session list (legacy key). */
-    val showFlavorIcons: Boolean = false,
+    /** Harness icons beside session titles, enabled by default on Android (legacy wire key). */
+    val showFlavorIcons: Boolean = true,
     val showHarnessIconInSessionHeader: Boolean = true,
     /** User message bubble color preset (utils/userMessageBubbleColor.ts). */
     val userMessageBubbleColor: String = DEFAULT_USER_MESSAGE_BUBBLE_COLOR,

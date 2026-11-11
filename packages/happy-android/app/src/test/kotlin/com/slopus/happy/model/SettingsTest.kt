@@ -131,14 +131,14 @@ class SettingsTest {
     // settingsDefaults
 
     @Test
-    fun defaultsAreHappyAppsDefaults() {
+    fun defaultsMatchHappyAppExceptForEnabledAndroidListIcons() {
         assertEquals(
             json(
                 """{
                 "schemaVersion":2,"viewInline":false,"expandTodos":true,"showLineNumbers":true,
                 "showLineNumbersInToolViews":false,"wrapLinesInDiffs":true,"diffStyle":"unified","analyticsOptOut":false,
                 "inferenceOpenAIKey":null,"experiments":false,"alwaysShowContextSize":false,"agentInputEnterToSend":true,
-                "avatarStyle":"brutalist","avatarMonochrome":false,"sessionListGrouping":"flat","showFlavorIcons":false,
+                "avatarStyle":"brutalist","avatarMonochrome":false,"sessionListGrouping":"flat","showFlavorIcons":true,
                 "showHarnessIconInSessionHeader":true,"userMessageBubbleColor":"gray","usageLimitShowRemaining":false,
                 "hideInactiveSessions":true,"sortSessionsByActivity":true,"expResumeSession":true,"fileDiffsSidebar":false,
                 "groupToolCalls":false,"compactToolCalls":false,"reviewPromptAnswered":false,"reviewPromptLikedApp":null,

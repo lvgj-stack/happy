@@ -36,4 +36,5 @@
     <string name="voice_microphone_title">Cal accés al micròfon</string>
     <string name="voice_microphone_ask">Happy necessita accés al micròfon per al xat de veu. Concedeix el permís quan se\'t demani.</string>
     <string name="voice_microphone_settings">Happy necessita accés al micròfon per al xat de veu. Activa l\'accés al micròfon a la configuració del dispositiu.</string>
+    <string name="android_session_list_harness_icons_description">Mostra les icones de harness al costat dels títols de les sessions</string>
 </resources>

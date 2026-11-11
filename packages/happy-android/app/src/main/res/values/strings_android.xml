@@ -55,4 +55,5 @@
     <string name="voice_microphone_title">Microphone Access Required</string>
     <string name="voice_microphone_ask">Happy needs access to your microphone for voice chat. Please grant permission when prompted.</string>
     <string name="voice_microphone_settings">Happy needs access to your microphone for voice chat. Please enable microphone access in your device settings.</string>
+    <string name="android_session_list_harness_icons_description">Display harness icons next to session titles</string>
 </resources>

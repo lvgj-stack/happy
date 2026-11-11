@@ -37,4 +37,5 @@
     <string name="voice_microphone_title">Wymagany dostęp do mikrofonu</string>
     <string name="voice_microphone_ask">Happy potrzebuje dostępu do mikrofonu na potrzeby czatu głosowego. Zezwól na niego, gdy pojawi się pytanie.</string>
     <string name="voice_microphone_settings">Happy potrzebuje dostępu do mikrofonu na potrzeby czatu głosowego. Włącz dostęp do mikrofonu w ustawieniach urządzenia.</string>
+    <string name="android_session_list_harness_icons_description">Wyświetlaj ikony harness obok tytułów sesji</string>
 </resources>

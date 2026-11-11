@@ -378,6 +378,12 @@ win:
   inside). Day and section headings become gaps; a computer heads its
   cards only when there is more than one; the archive is one card under
   its toggle. Rows show no timestamp.
+- **Session harness icons:** each session title has a 16 dp harness icon
+  with a 6 dp gap, in flat, project/worktree, archived, bot/task and agent
+  connection lists. The existing Appearance switch (`showFlavorIcons`)
+  defaults to on on Android; an explicit saved off value is respected.
+  List avatars carry no duplicate harness badge. Happy Agent uses Happy's
+  icon, regardless of provider; unknown metadata gets a generic chip.
 - **Legacy tasks** (iOS 36b11c5bf): a Happy Agent session with
   `metadata.task` is a task. Each computer's tasks follow its bots, in
   the person's `orderKey` (plain string order), then unjoined ones newest

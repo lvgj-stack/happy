@@ -390,7 +390,7 @@ fun AppearanceScreen(
                 ) { value -> onSettingsChange { it.copy(showHarnessIconInSessionHeader = value) } }
                 SwitchItem(
                     stringResource(R.string.settings_appearance_show_harness_icons_in_session_list),
-                    stringResource(R.string.settings_appearance_show_harness_icons_in_session_list_description),
+                    stringResource(R.string.android_session_list_harness_icons_description),
                     Ionicon.AppsOutline, violet,
                     settings.showFlavorIcons,
                 ) { value -> onSettingsChange { it.copy(showFlavorIcons = value) } }

@@ -143,6 +143,15 @@ fun <T> indexSessionsById(sessions: Iterable<T>, id: (T) -> String): Map<String,
 /** utils/avatarHarness.ts: which harness badge a session avatar carries. */
 enum class AvatarHarness { Claude, Codex, Agy, Cursor, Rig }
 
+/** The session's harness, independently of the model provider used by Happy. Unknown metadata stays unknown. */
+fun resolveSessionHarness(flavor: String?, clientId: String?): AgentType? {
+    if (clientId == "rig") return AgentType.Rig
+    return when (val key = flavor?.trim()?.lowercase()) {
+        "gpt", "openai" -> AgentType.Codex
+        else -> AgentType.fromWire(key)
+    }
+}
+
 fun resolveAvatarHarness(flavor: String?, clientId: String?): AvatarHarness? {
     if (clientId == "rig") return AvatarHarness.Rig
     return when (flavor) {

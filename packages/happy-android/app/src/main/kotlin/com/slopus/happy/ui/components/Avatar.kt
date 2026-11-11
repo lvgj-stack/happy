@@ -49,7 +49,7 @@ import kotlin.math.roundToInt
 @Immutable
 data class AvatarSettings(
     val monochrome: Boolean = false,
-    val showFlavorIcons: Boolean = false,
+    val showFlavorIcons: Boolean = true,
     val showHarnessIconInSessionHeader: Boolean = true,
 )
 

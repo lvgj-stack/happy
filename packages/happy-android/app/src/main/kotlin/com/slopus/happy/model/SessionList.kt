@@ -16,7 +16,7 @@ data class SessionRowData(
     val id: String,
     val botId: String? = null,
     val botUsername: String? = null,
-    /** A task (`metadata.task`): listed under "Tasks", its folder as its place, no harness badge. */
+    /** A task (`metadata.task`): listed under "Tasks", its folder as its place, an unbadged avatar. */
     val task: Boolean = false,
     /** A task whose machine takes `leaveTask`: its swipe leaves it. A task without it doesn't swipe. */
     val leavesTask: Boolean = false,

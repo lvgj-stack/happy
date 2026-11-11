@@ -48,7 +48,7 @@ import com.slopus.happy.model.compactCount
 import com.slopus.happy.model.resolveFlatRowPresentation
 import com.slopus.happy.model.visibleGitChanges
 import com.slopus.happy.ui.components.Avatar
-import com.slopus.happy.ui.components.AvatarBadgeLocation
+import com.slopus.happy.ui.components.SessionHarnessIcon
 import com.slopus.happy.ui.components.HomeCardSpec
 import com.slopus.happy.ui.components.Icon
 import com.slopus.happy.ui.components.Ionicon
@@ -224,10 +224,7 @@ fun FlatSessionRow(
                     size = avatarSize,
                     bot = session.botId != null,
                     monochrome = faded,
-                    flavor = session.flavor,
-                    clientId = session.clientId,
-                    // A task wears no harness badge (happy-ios TaskAvatarViewTests).
-                    badgeLocation = if (session.task) AvatarBadgeLocation.None else AvatarBadgeLocation.SessionList,
+                    // Harness identity is beside the title, leaving every avatar unbadged.
                     imageUri = session.avatarUri,
                     thumbhash = session.avatarThumbhash,
                 )
@@ -239,6 +236,7 @@ fun FlatSessionRow(
                     .alpha(if (faded) FlatRowSpec.CONTENT_FADED else 1f),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    SessionHarnessIcon(session.flavor, session.clientId)
                     Box(modifier = Modifier.weight(1f).testTag(FlatRowTags.TITLE)) {
                         val ink = if (faded) colors.textSecondary else colors.text
                         // A carded row's ground is its card's.

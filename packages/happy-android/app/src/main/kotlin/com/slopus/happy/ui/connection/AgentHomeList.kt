@@ -85,6 +85,9 @@ import com.slopus.happy.ui.components.HomeCardRow
 import com.slopus.happy.ui.components.HomeCardSpec
 import com.slopus.happy.ui.components.HomeCardTags
 import com.slopus.happy.ui.components.Icon
+import com.slopus.happy.ui.components.LocalAvatarSettings
+import com.slopus.happy.ui.components.SessionHarnessIcon
+import com.slopus.happy.ui.components.SessionHarnessIconSpec
 import com.slopus.happy.ui.components.Ionicon
 import com.slopus.happy.ui.components.Octicon
 import com.slopus.happy.ui.components.MenuSpec
@@ -513,6 +516,7 @@ internal fun AgentFeedRow.panelKey(): String? = when (val row = this) {
 }
 
 /** Where a card row's title starts, from its card's edge: its level's lane, then its mark's when it wears one. */
+@Composable
 private fun titleStart(row: AgentFeedRow): Dp {
     val (depth, marked) = when (row) {
         is AgentFeedRow.Conversation -> row.depth to AgentHomeSpec.hasMark(row.kind)
@@ -520,7 +524,8 @@ private fun titleStart(row: AgentFeedRow): Dp {
         AgentFeedRow.Artifacts, AgentFeedRow.Plugins, AgentFeedRow.Pipelines, is AgentFeedRow.Feed, AgentFeedRow.Todos, is AgentFeedRow.Surface -> 0 to true
         is AgentFeedRow.Section -> return 0.dp
     }
-    return AgentHomeSpec.markInset + AgentHomeSpec.indent * depth + if (marked) AgentHomeSpec.mark + AgentHomeSpec.markGap else 0.dp
+    val harness = if (row is AgentFeedRow.Conversation && LocalAvatarSettings.current.showFlavorIcons) SessionHarnessIconSpec.size + SessionHarnessIconSpec.titleGap else 0.dp
+    return AgentHomeSpec.markInset + AgentHomeSpec.indent * depth + (if (marked) AgentHomeSpec.mark + AgentHomeSpec.markGap else 0.dp) + harness
 }
 
 /**
@@ -566,9 +571,11 @@ private fun ConversationRow(row: AgentFeedRow.Conversation, onOpen: (String) -> 
         if (marked) {
             Box(modifier = Modifier.size(AgentHomeSpec.mark).testTag(AgentHomeTags.ROW_MARK)) { ConversationMark(row, AgentHomeSpec.mark) }
         }
+        Box(Modifier.padding(start = if (marked) AgentHomeSpec.markGap else 0.dp)) {
+            SessionHarnessIcon(clientId = "rig")
+        }
         Box(
             modifier = Modifier
-                .padding(start = if (marked) AgentHomeSpec.markGap else 0.dp)
                 .weight(1f)
                 .testTag(AgentHomeTags.ROW_TITLE),
         ) {

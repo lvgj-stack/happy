@@ -36,4 +36,5 @@
     <string name="voice_microphone_title">Accesso al microfono necessario</string>
     <string name="voice_microphone_ask">Happy ha bisogno dell\'accesso al microfono per la chat vocale. Concedi l\'autorizzazione quando richiesto.</string>
     <string name="voice_microphone_settings">Happy ha bisogno dell\'accesso al microfono per la chat vocale. Attiva l\'accesso al microfono nelle impostazioni del dispositivo.</string>
+    <string name="android_session_list_harness_icons_description">Mostra le icone harness accanto ai titoli delle sessioni</string>
 </resources>

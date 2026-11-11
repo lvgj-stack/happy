@@ -290,7 +290,7 @@ class HomeLayoutTest {
         val avatar = rule.onAllNodesWithTag(FlatRowTags.AVATAR, useUnmergedTree = true)[0].bounds
         assertBox("avatar", avatar, 32.dp, row.top + 20.5.dp, 40.dp, 40.dp)
         val title = rule.onAllNodesWithTag(FlatRowTags.TITLE, useUnmergedTree = true)[0].bounds
-        assertDp("title left", 84, title.left)
+        assertDp("title after the 16 harness icon and 6 gap", 106, title.left)
         assertDp("title top", row.top + 10.dp, title.top)
         assertDp("title line", 22, title.bottom - title.top)
         val corner = rule.onAllNodesWithTag(FlatRowTags.TOP_RIGHT, useUnmergedTree = true)[0].bounds
@@ -532,10 +532,10 @@ class HomeLayoutTest {
         val nested = chats[1].bounds
         assertBox("the worktree's chat, under it", nested, 16.dp, worktree.bottom, width, 48.dp)
 
-        assertDp("the project's chat by its name, at 56", 16 + 56, rule.onNodeWithText("Fix login", useUnmergedTree = true).bounds.left)
+        assertDp("the project's chat after its harness icon", 16 + 56 + 16 + 6, rule.onNodeWithText("Fix login", useUnmergedTree = true).bounds.left)
         assertDp("the branch glyph where a name starts", 16 + 56, rule.node(ProjectListTags.WORKTREE_ICON).bounds.left)
         assertDp("the worktree's name 6 after its 16 glyph", 16 + 56 + 16 + 6, rule.onNodeWithText("Gdansk", useUnmergedTree = true).bounds.left)
-        assertDp("the worktree's chat one lane in, at 96", 16 + 96, rule.onNodeWithText("Ship it", useUnmergedTree = true).bounds.left)
+        assertDp("the worktree's chat one lane in, after its harness icon", 16 + 96 + 16 + 6, rule.onNodeWithText("Ship it", useUnmergedTree = true).bounds.left)
 
         val stems = rule.onAllNodesWithTag(ProjectListTags.TREE_STEM, useUnmergedTree = true)
         stems.assertCountEquals(2)

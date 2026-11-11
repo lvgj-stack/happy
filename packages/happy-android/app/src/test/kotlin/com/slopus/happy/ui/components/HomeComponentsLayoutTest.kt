@@ -75,7 +75,9 @@ class HomeComponentsLayoutTest {
     @Test
     fun avatarBadgeFollowsItsSetting() {
         rule.setHappyContent {
-            Avatar(id = "s", size = 48.dp, flavor = "codex", badgeLocation = AvatarBadgeLocation.SessionList)
+            CompositionLocalProvider(LocalAvatarSettings provides AvatarSettings(showFlavorIcons = false)) {
+                Avatar(id = "s", size = 48.dp, flavor = "codex", badgeLocation = AvatarBadgeLocation.SessionList)
+            }
         }
         rule.onAllNodesWithTag(AvatarTags.BADGE, useUnmergedTree = true).assertCountEquals(0)
     }

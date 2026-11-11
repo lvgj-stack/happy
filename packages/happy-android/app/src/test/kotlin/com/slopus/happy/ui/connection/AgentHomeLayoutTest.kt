@@ -328,19 +328,19 @@ class AgentHomeLayoutTest {
         // The card 16 in from the window, the mark 16 in from the card.
         assertBox("bot mark", mark, 32.dp, bot.top + 9.dp, 30.dp, 30.dp)
         fun titleStart(title: String) = rule.onNodeWithText(title, useUnmergedTree = true).bounds.left
-        assertDp("a bot's title follows its mark", 32 + 30 + 12, titleStart("Happy"))
-        assertDp("a task's too", 32 + 30 + 12, titleStart("Fix login redirect"))
-        assertDp("a subtask's starts under its parent's title", 32 + 42, titleStart("Review the PR"))
+        assertDp("a bot's title follows its mark and harness icon", 32 + 30 + 12 + 16 + 6, titleStart("Happy"))
+        assertDp("a task's too", 32 + 30 + 12 + 16 + 6, titleStart("Fix login redirect"))
+        assertDp("a subtask's starts under its parent's title", 32 + 42 + 16 + 6, titleStart("Review the PR"))
         assertDp("a project's title follows its mark", 32 + 30 + 12, titleStart("happy"))
-        assertDp("its conversation a level in", 32 + 42, titleStart("Android home feed"))
+        assertDp("its conversation a level in, after its harness icon", 32 + 42 + 16 + 6, titleStart("Android home feed"))
         assertDp("a worktree a level in", 32 + 42, titleStart("fix-scroll"))
-        assertDp("and its conversation two", 32 + 84, titleStart("Scroll jumps"))
+        assertDp("and its conversation two, after its harness icon", 32 + 84 + 16 + 6, titleStart("Scroll jumps"))
         val task = rule.node(AgentHomeTags.row("agent-at1")).bounds
         val dividers = rule.onAllNodesWithTag(AgentHomeTags.ROW_DIVIDER, useUnmergedTree = true).fetchSemanticsNodes().map {
             with(rule.density) { it.boundsInRoot.left.toDp() to it.boundsInRoot.bottom.toDp() }
         }
         val under = dividers.single { (_, bottom) -> (bottom - task.bottom).value in -0.5f..0.5f }
-        assertDp("the task's hairline runs from its title", 32 + 30 + 12, under.first)
+        assertDp("the task's hairline runs from its title, after the harness icon", 32 + 30 + 12 + 16 + 6, under.first)
     }
 
     @Test

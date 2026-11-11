@@ -56,6 +56,7 @@ import com.slopus.happy.model.resolveFlatRowPresentation
 import com.slopus.happy.model.workspaceOrigin
 import com.slopus.happy.ui.chat.light
 import com.slopus.happy.ui.components.Avatar
+import com.slopus.happy.ui.components.SessionHarnessIcon
 import com.slopus.happy.ui.components.HomeCardSpec
 import com.slopus.happy.ui.components.Icon
 import com.slopus.happy.ui.components.Ionicon
@@ -536,6 +537,7 @@ private fun CheckoutChatRow(row: ProjectHomeRow.Chat, callbacks: HomeListCallbac
             } else {
                 AvatarLane { TreeBranch(row.last) }
             }
+            SessionHarnessIcon(session.flavor, session.clientId)
             RowName(session.name ?: stringResource(R.string.session_new_chat), now.working, ProjectListSpec.worktreeName)
             Box(modifier = Modifier.padding(start = ProjectListSpec.trailingGap)) {
                 AttentionDot(now.blocked, now.unread)
@@ -612,6 +614,7 @@ private fun ChatRow(session: SessionRowData, bot: Boolean, archived: Boolean, ca
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AvatarLane { Avatar(id = session.avatarId, size = ProjectListSpec.avatar, bot = bot, imageUri = session.avatarUri, thumbhash = session.avatarThumbhash) }
+            SessionHarnessIcon(session.flavor, session.clientId)
             RowName(session.name ?: stringResource(R.string.session_new_chat), presentation.shimmerTitle, ProjectListSpec.projectName)
             if (dot != null) {
                 Box(modifier = Modifier.padding(start = ProjectListSpec.trailingGap)) {
