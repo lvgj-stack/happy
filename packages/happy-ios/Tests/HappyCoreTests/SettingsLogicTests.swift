@@ -50,6 +50,14 @@ final class AgentDefaultsTests: XCTestCase {
         XCTAssertEqual(AgentDefaults.effortLevels(.codex, model: "gpt-6-luna").count, 5)
         XCTAssertEqual(AgentDefaults.effortLevels(.codex, model: "custom").map(\.key), ["low", "medium", "high", "xhigh"])
         XCTAssertEqual(AgentDefaults.effortLevels(.agy, model: "GPT-OSS 120B (Medium)"), [])
+        XCTAssertEqual(AgentDefaults.effortLevels(.cursor, model: "default"), [])
+    }
+
+    func testCursorDefaultsAndOptions() {
+        XCTAssertEqual(AgentDefaults.Agent.cursor.name, "Cursor")
+        XCTAssertEqual(AgentDefaults.codeDefaults(.cursor, cliVersion: nil), AgentDefaults.Config(permissionMode: "agent", modelMode: "default", effortLevel: nil))
+        XCTAssertEqual(AgentDefaults.permissionModes(.cursor).map(\.key), ["agent", "plan", "ask", "yolo"])
+        XCTAssertEqual(AgentDefaults.modelModes(.cursor, configured: "composer-2.5"), [])
     }
 
     func testOptionName() {
@@ -60,7 +68,7 @@ final class AgentDefaultsTests: XCTestCase {
     }
 
     func testRetiredAgentsAreNotConfigurable() {
-        XCTAssertEqual(AgentDefaults.Agent.configurable, [.claude, .codex, .agy])
+        XCTAssertEqual(AgentDefaults.Agent.configurable, [.claude, .codex, .agy, .cursor])
     }
 }
 

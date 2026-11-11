@@ -406,6 +406,7 @@ final class AvatarBadgeTests: XCTestCase {
         assertFrame(badge.circle, rect(37, 37, 25, 25))
         assertFrame(badge.glyph, rect(39.5, 39.5, 20, 20))
         XCTAssertEqual(AvatarBadge.badgeGlyphRatio(harness: "rig"), 0.26)
+        XCTAssertEqual(AvatarBadge.badgeGlyphRatio(harness: "cursor"), 0.3)
         XCTAssertEqual(AvatarBadge.badgeGlyphRatio(harness: "agy"), 0.42)
     }
 }

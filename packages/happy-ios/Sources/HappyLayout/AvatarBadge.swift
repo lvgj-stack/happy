@@ -12,7 +12,7 @@ public enum AvatarBadge {
     public static func badgeGlyphRatio(harness: String) -> CGFloat {
         switch harness {
         case "rig": 0.26
-        case "codex": 0.3
+        case "codex", "cursor": 0.3
         case "claude": 0.34
         default: 0.42
         }

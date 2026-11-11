@@ -84,6 +84,10 @@ final class SessionDetailsFormattingTests: XCTestCase {
             "Set-Location -LiteralPath 'C:\\a''b'; happy codex --resume t1"
         )
         XCTAssertEqual(SessionDetails.resumeCommand(.object(["claudeSessionId": .string("c1")])), "happy claude --resume c1")
+        XCTAssertEqual(
+            SessionDetails.resumeCommand(.object(["path": .string("/repo"), "flavor": .string("cursor"), "cursorSessionId": .string("cur-1")])),
+            "cd '/repo' && happy cursor --resume cur-1"
+        )
         XCTAssertNil(SessionDetails.resumeCommand(.object(["client": .object(["id": .string("rig")]), "claudeSessionId": .string("c1")])))
         XCTAssertNil(SessionDetails.resumeCommand(.object(["capabilities": .object(["resume": .bool(false)]), "claudeSessionId": .string("c1")])))
         XCTAssertNil(SessionDetails.resumeCommand(.object(["flavor": .string("codex")])))
@@ -114,6 +118,7 @@ final class SessionDetailsFormattingTests: XCTestCase {
         XCTAssertEqual(SessionDetails.aiProvider(.object(["flavor": .string("openai")])), "Codex")
         XCTAssertEqual(SessionDetails.aiProvider(.object(["flavor": .string("gemini")])), "Gemini")
         XCTAssertEqual(SessionDetails.aiProvider(.object(["flavor": .string("agy")])), "agy")
+        XCTAssertEqual(SessionDetails.aiProvider(.object(["flavor": .string("cursor")])), "Cursor")
         XCTAssertEqual(SessionDetails.aiProvider(.object([
             "client": .object(["id": .string("rig")]),
             "provider": .object(["id": .string("anthropic"), "name": .string("Anthropic")]),
@@ -196,6 +201,8 @@ final class SessionDetailsQuickActionTests: XCTestCase {
         XCTAssertEqual(SessionDetails.resumeAvailability(session(metadata: claude), machine: machine(active: false, metadata: resumable)), .machineOffline)
         XCTAssertEqual(SessionDetails.resumeAvailability(session(metadata: claude), machine: machine()), .hidden, "an older daemon")
         XCTAssertEqual(SessionDetails.resumeAvailability(session(metadata: claude), machine: machine(metadata: resumable)), .available)
+        let cursorSession: [String: JSONValue] = ["machineId": .string("m1"), "path": .string("/w"), "flavor": .string("cursor"), "cursorSessionId": .string("cur-1")]
+        XCTAssertEqual(SessionDetails.resumeAvailability(session(metadata: cursorSession), machine: machine(metadata: resumable)), .available)
     }
 
     func testForkSource() {

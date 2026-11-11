@@ -11,6 +11,7 @@ public enum AgentDefaults {
         case gemini
         case openclaw
         case agy
+        case cursor
 
         /// utils/harnessCatalog.ts `HARNESS_NAMES`.
         public var name: String {
@@ -20,6 +21,7 @@ public enum AgentDefaults {
             case .gemini: "Gemini"
             case .openclaw: "OpenClaw"
             case .agy: "Antigravity"
+            case .cursor: "Cursor"
             }
         }
 
@@ -78,6 +80,7 @@ public enum AgentDefaults {
         case .gemini: Config(permissionMode: "default", modelMode: "gemini-2.5-pro", effortLevel: nil)
         case .openclaw: Config(permissionMode: "default", modelMode: "default", effortLevel: nil)
         case .agy: Config(permissionMode: "default", modelMode: "Gemini 3.8 Flash", effortLevel: "medium")
+        case .cursor: Config(permissionMode: "agent", modelMode: "default", effortLevel: nil)
         }
     }
 
@@ -202,6 +205,13 @@ public enum AgentDefaults {
                 Option("default", "Default", "agy sandbox"),
                 Option("bypassPermissions", "Yolo", "never asks"),
             ]
+        case .cursor:
+            [
+                Option("agent", "Agent", "asks before tools"),
+                Option("plan", "Plan", "plan first"),
+                Option("ask", "Ask", "read-only Q&A"),
+                Option("yolo", "Agent (auto-approve)", "runs tools without asking"),
+            ]
         }
     }
 
@@ -246,6 +256,8 @@ public enum AgentDefaults {
                 Option("Claude Opus 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)"),
                 Option("GPT-OSS 120B (Medium)", "GPT-OSS 120B (Medium)"),
             ]
+        case .cursor:
+            [Option("default", "Default model")]
         }
     }
 
@@ -282,7 +294,7 @@ public enum AgentDefaults {
             keys = byModel[model] ?? ["low", "medium", "high", "xhigh"]
         case .agy:
             keys = model == "Gemini 3.8 Flash" ? ["low", "medium", "high"] : []
-        case .gemini, .openclaw:
+        case .gemini, .openclaw, .cursor:
             keys = []
         }
         return keys.map { Option($0, $0 == "xhigh" ? "xHigh" : $0.prefix(1).uppercased() + $0.dropFirst()) }

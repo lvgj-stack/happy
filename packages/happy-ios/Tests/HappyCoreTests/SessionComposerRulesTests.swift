@@ -68,6 +68,7 @@ final class SessionComposerRulesTests: XCTestCase {
         XCTAssertTrue(SessionComposerRules.canUseAttachments(sessionRecord(metadata: "{}")))
         XCTAssertTrue(SessionComposerRules.canUseAttachments(sessionRecord(metadata: #"{ "flavor": "codex" }"#)))
         XCTAssertFalse(SessionComposerRules.canUseAttachments(sessionRecord(metadata: #"{ "flavor": "gemini" }"#)))
+        XCTAssertFalse(SessionComposerRules.canUseAttachments(sessionRecord(metadata: #"{ "flavor": "cursor" }"#)))
         XCTAssertTrue(SessionComposerRules.canUseAttachments(rig()))
         XCTAssertFalse(SessionComposerRules.canUseAttachments(rig(capabilities: #"{ "attachments": { "enabled": false } }"#)))
         XCTAssertFalse(SessionComposerRules.canUseAttachments(nil))
@@ -83,6 +84,7 @@ final class SessionComposerRulesTests: XCTestCase {
         XCTAssertFalse(SessionComposerRules.canUseAttachments(starting: .gemini))
         XCTAssertFalse(SessionComposerRules.canUseAttachments(starting: .openclaw))
         XCTAssertFalse(SessionComposerRules.canUseAttachments(starting: .agy))
+        XCTAssertFalse(SessionComposerRules.canUseAttachments(starting: .cursor))
     }
 }
 

@@ -322,6 +322,39 @@ final class ModelModeOptionsTests: XCTestCase {
         XCTAssertEqual(models.last?.description, "saved model")
     }
 
+    func testCursorUsesHardcodedModesBeforeStartAndMetadataCatalogInSession() {
+        XCTAssertEqual(keys(Options.hardcodedPermissionModes(flavor: "cursor")), ["agent", "plan", "ask", "yolo"])
+        XCTAssertEqual(keys(Options.hardcodedModelModes(flavor: "cursor")), ["default"])
+        XCTAssertEqual(Options.includeConfiguredModel(flavor: "cursor", models: Options.hardcodedModelModes(flavor: "cursor"), configured: "composer-2.5").map(\.key), ["default"])
+
+        let metadata = json("""
+        {
+          "flavor": "cursor",
+          "currentOperatingModeCode": "agent",
+          "operatingModes": [
+            { "code": "agent", "value": "Agent" },
+            { "code": "plan", "value": "Plan" },
+            { "code": "ask", "value": "Ask" },
+            { "code": "yolo", "value": "Agent (auto-approve)", "description": "Runs tools without asking" }
+          ],
+          "currentModelCode": "claude-opus-5-5[context=300k,effort=medium,fast=false]",
+          "models": [
+            { "code": "composer-2.5", "value": "Composer 2.5" },
+            { "code": "claude-opus-5-5[context=300k,effort=medium,fast=false]", "value": "Claude Opus 5.5" }
+          ]
+        }
+        """)
+        let modes = ComposerModes(metadata: metadata, picks: ComposerPicks(), agentDefaultOverrides: [:])
+        XCTAssertEqual(modes.availableModes.map(\.key), ["plan", "agent", "ask", "yolo"])
+        XCTAssertEqual(modes.permissionMode?.key, "agent")
+        XCTAssertEqual(modes.availableModels.map(\.key), [
+            "composer-2.5",
+            "claude-opus-5-5[context=300k,effort=medium,fast=false]",
+        ])
+        XCTAssertEqual(modes.modelMode?.key, "claude-opus-5-5[context=300k,effort=medium,fast=false]")
+        XCTAssertEqual(modes.availableEffortLevels, [])
+    }
+
     func testResolvesTheFirstMatchingPreferredKey() {
         let options = [ModeOption(key: "a", name: "A"), ModeOption(key: "b", name: "B")]
         XCTAssertEqual(Options.resolveCurrentOption(options, preferredKeys: ["missing", "b", "a"]), ModeOption(key: "b", name: "B"))

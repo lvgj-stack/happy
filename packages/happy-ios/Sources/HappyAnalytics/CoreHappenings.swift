@@ -54,7 +54,7 @@ extension Analytics {
         case .claude: .claude
         case .codex: .codex
         case .gemini: .gemini
-        case .openclaw, .agy: .other
+        case .openclaw, .agy, .cursor: .other
         // Happy Agent's provider is its catalog's, which the start doesn't carry.
         case .rig: nil
         }

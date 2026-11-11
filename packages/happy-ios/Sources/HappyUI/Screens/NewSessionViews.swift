@@ -325,6 +325,7 @@ final class NewSessionAgentButton: UIControl {
         case "rig": "logo-black"
         case "codex": "icon-gpt"
         case "agy": "icon-agy"
+        case "cursor": "icon-cursor"
         default: "icon-claude"
         }
     }

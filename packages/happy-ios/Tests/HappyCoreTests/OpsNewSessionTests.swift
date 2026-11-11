@@ -140,11 +140,12 @@ final class OpsNewSessionTests: XCTestCase {
                 daemonState: nil, dataKeyCipher: nil, decryptable: false
             )
         }
-        try store.upsertMachine(machine("cli", .object(["host": .string("host"), "cliAvailability": .object(["claude": .bool(false), "codex": .bool(true), "agy": .bool(false)])])))
+        try store.upsertMachine(machine("cli", .object(["host": .string("host"), "cliAvailability": .object(["claude": .bool(false), "codex": .bool(true), "agy": .bool(false), "cursor": .bool(true)])])))
         try store.upsertMachine(machine("rig", .object(["host": .string("host"), "machineKind": .string("rig"), "siblingMachineId": .string("cli")])) )
         let choices = MachineChoice.collect(try store.machines())
         let choice = try XCTUnwrap(MachineChoice.find(in: choices, machineId: "rig"))
-        XCTAssertEqual(choice.availableAgents, ["codex", "rig"])
+        XCTAssertEqual(choice.availableAgents, ["codex", "cursor", "rig"])
+        XCTAssertFalse(MachineChoice.collect([machine("legacy", .object(["host": .string("host")]))]).first?.availableAgents.contains("cursor") ?? true)
         XCTAssertEqual(choice.resolveNewSessionAgent(stored: "claude", picked: nil), "rig")
         XCTAssertEqual(choice.resolveNewSessionAgent(stored: "claude", picked: "codex"), "codex")
         XCTAssertEqual(choice.resolveAgent("gemini"), "codex")

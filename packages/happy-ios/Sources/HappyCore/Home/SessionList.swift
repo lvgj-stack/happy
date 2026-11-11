@@ -40,6 +40,7 @@ public struct SessionAvatar: Equatable, Sendable {
         case claude
         case codex
         case agy
+        case cursor
         case rig
     }
 
@@ -59,6 +60,7 @@ public struct SessionAvatar: Equatable, Sendable {
         case "claude": return .claude
         case "codex": return .codex
         case "agy": return .agy
+        case "cursor": return .cursor
         default: return nil
         }
     }

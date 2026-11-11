@@ -104,9 +104,9 @@ public final class AvatarView: UIView {
         badge.isHidden = content.avatar.harness == nil || ((content.avatar.isBot || content.avatar.isTask) && photo.image == nil)
         if let harness = content.avatar.harness {
             let image = AvatarImages.harness(harness)
-            // Codex's and Happy Agent's marks are black; they follow the text
+            // Codex's, Cursor's and Happy Agent's marks are monochrome; they follow the text
             // colour so they show in dark mode.
-            let tinted = harness == .codex || harness == .rig
+            let tinted = harness == .codex || harness == .cursor || harness == .rig
             badgeGlyph.image = tinted ? image?.withRenderingMode(.alwaysTemplate) : image
             badgeGlyph.tintColor = UIColor(Palette.text)
         }
@@ -154,6 +154,7 @@ enum AvatarImages {
         case .claude: UIImage.happy("icon-claude")
         case .codex: UIImage.happy("icon-gpt")
         case .agy: UIImage.happy("icon-agy")
+        case .cursor: UIImage.happy("icon-cursor")
         case .rig: UIImage.happy("logo-black")
         }
     }

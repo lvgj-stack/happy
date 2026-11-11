@@ -20,7 +20,7 @@ public struct SpawnSessionOptions: Sendable, Equatable {
     public var approvedNewDirectoryCreation = false
     /// `token`, sent to CLI flavor agents only.
     public var token: String?
-    /// `agent`: claude, codex, gemini, openclaw, agy or rig.
+    /// `agent`: claude, codex, gemini, openclaw, agy, cursor or rig.
     public var agent: String?
     /// `permissionMode`, sent to either harness.
     public var permissionMode: String?
