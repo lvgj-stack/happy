@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
-import type { Session as ApiSession } from '@/api/types';
+import type { Metadata, Session as ApiSession, UserMessage } from '@/api/types';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
 import { AcpBackend, isHappyChangeTitleTool, type AcpPermissionHandler } from './AcpBackend';
@@ -14,6 +14,7 @@ import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { downloadCodexFileEventAttachment } from '@/codex/utils/attachmentEvents';
 import { createSerialAsyncHandler } from '@/codex/utils/serialAsyncHandler';
 import { hashObject } from '@/utils/deterministicJson';
+import { AsyncLock } from '@/utils/lock';
 import { Credentials, readSettings } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/run';
 import { createSessionMetadata } from '@/utils/createSessionMetadata';
@@ -274,6 +275,7 @@ function formatEnvelopeForServerLog(agentName: string, envelope: SessionEnvelope
 
 type AcpSwitchMode = {
   permissionMode?: string;
+  permissionModeOrder?: number;
   model?: string | null;
   effort?: string | null;
   appendSystemPrompt?: string;
@@ -432,6 +434,28 @@ class GenericAcpPermissionHandler extends BasePermissionHandler implements AcpPe
   setAutoApprove(enabled: boolean): void {
     this.autoApprove = enabled;
     logger.debug(`${this.logPrefix} Auto-approve mode set to: ${enabled}`);
+    if (!enabled || this.pendingRequests.size === 0) return;
+
+    // A mobile mode pick must also unblock tools that are already waiting.
+    const pending = Array.from(this.pendingRequests.entries());
+    this.pendingRequests.clear();
+    this.session.updateAgentState((currentState) => {
+      const requests = { ...currentState.requests };
+      const completedRequests = { ...currentState.completedRequests };
+      for (const [id, request] of pending) {
+        completedRequests[id] = {
+          ...requests[id],
+          tool: request.toolName,
+          arguments: request.input,
+          completedAt: Date.now(),
+          status: 'approved',
+          decision: 'approved',
+        };
+        delete requests[id];
+      }
+      return { ...currentState, requests, completedRequests };
+    });
+    for (const [, request] of pending) request.resolve({ decision: 'approved' });
   }
 
   private shouldAutoApprove(toolName: string, toolCallId: string, input: unknown): boolean {
@@ -622,8 +646,23 @@ export async function runAcp(opts: {
   // call in claudeRemoteLauncher for the full rationale.
   permissionHandler.reset('Previous CLI process exited before responding');
   const sessionManager = new AcpSessionManager();
-  const messageQueue = new MessageQueue2<AcpSwitchMode>((mode) => hashObject(mode));
+  const messageQueue = new MessageQueue2<AcpSwitchMode>(({ permissionModeOrder, ...mode }) => hashObject({
+    ...mode,
+    // Messages after the latest live pick still share a batch; older picks
+    // stay separate so they cannot absorb a newer explicit message mode.
+    ...(permissionModeOrder === undefined ? {} : {
+      permissionModeOrder: Math.min(permissionModeOrder, metadataPermissionModeOrder + 1),
+    }),
+  }));
   let currentPermissionMode: string | undefined = opts.permissionMode;
+  let metadataPermissionMode: string | undefined;
+  let permissionNotificationOrder = 0;
+  let currentPermissionModeOrder = 0;
+  let metadataPermissionModeOrder = 0;
+  const permissionModeForBatch = (mode: AcpSwitchMode): string | undefined =>
+    sessionFlavor === 'cursor' && (mode.permissionModeOrder ?? 0) < metadataPermissionModeOrder
+      ? metadataPermissionMode
+      : mode.permissionMode;
   let currentModel: string | null | undefined = opts.model;
   let currentEffort: string | null | undefined;
   let currentAppendSystemPrompt: string | undefined = undefined;
@@ -725,7 +764,7 @@ export async function runAcp(opts: {
     }
   };
 
-  const switchPermissionModeIfRequested = async (requestedMode: string): Promise<void> => {
+  const applyPermissionModeIfRequested = async (requestedMode: string): Promise<void> => {
     if (!requestedMode) {
       return;
     }
@@ -816,6 +855,15 @@ export async function runAcp(opts: {
       };
     }
   };
+
+  // Keep provider RPC results in order with the permission transitions they
+  // belong to. A newer message or live pick supersedes waiting older changes.
+  const permissionModeLock = new AsyncLock();
+  const switchPermissionModeIfRequested = (requestedMode: string, order = 0): Promise<void> =>
+    permissionModeLock.inLock(async () => {
+      if (sessionFlavor === 'cursor' && order < currentPermissionModeOrder) return;
+      await applyPermissionModeIfRequested(requestedMode);
+    });
 
   const switchModelIfRequested = async (requestedModel: string): Promise<void> => {
     if (!requestedModel) {
@@ -1119,15 +1167,18 @@ export async function runAcp(opts: {
     session.trackAttachmentDownload(downloadCodexFileEventAttachment(session, fileEvent));
   });
 
-  session.onUserMessage(createSerialAsyncHandler(async (message) => {
+  const handleUserMessage = createSerialAsyncHandler(async ({ message, order }: { message: UserMessage; order: number }) => {
     const attachments = await session.drainAttachmentsForUserMessage();
     if (!message.content.text) {
       return;
     }
 
     if (typeof message.meta?.permissionMode === 'string') {
-      currentPermissionMode = message.meta.permissionMode;
-      logger.debug(`[${opts.agentName}] Requested ACP permission mode: ${currentPermissionMode}`);
+      if (sessionFlavor !== 'cursor' || order >= currentPermissionModeOrder) {
+        currentPermissionMode = message.meta.permissionMode;
+        currentPermissionModeOrder = order;
+      }
+      logger.debug(`[${opts.agentName}] Requested ACP permission mode: ${message.meta.permissionMode}`);
     }
 
     if (message.meta && Object.prototype.hasOwnProperty.call(message.meta, 'model')) {
@@ -1149,6 +1200,7 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] /clear command pushed to isolated queue`);
       messageQueue.pushIsolateAndClear(message.content.text, {
         permissionMode: currentPermissionMode,
+        ...(sessionFlavor === 'cursor' ? { permissionModeOrder: order } : {}),
         model: currentModel,
         effort: currentEffort,
         appendSystemPrompt: currentAppendSystemPrompt,
@@ -1158,13 +1210,16 @@ export async function runAcp(opts: {
 
     messageQueue.push(message.content.text, {
       permissionMode: currentPermissionMode,
+      ...(sessionFlavor === 'cursor' ? { permissionModeOrder: order } : {}),
       model: currentModel,
       effort: currentEffort,
       appendSystemPrompt: currentAppendSystemPrompt,
     }, attachments);
   }, (error) => {
     logger.debug(`[${opts.agentName}] Failed to queue user message:`, error);
-  }));
+  });
+  // Stamp arrivals before serialized work or attachment downloads can delay them.
+  session.onUserMessage((message) => handleUserMessage({ message, order: ++permissionNotificationOrder }));
   session.keepAlive(thinking, 'remote');
 
   const keepAliveInterval = setInterval(() => {
@@ -1227,6 +1282,33 @@ export async function runAcp(opts: {
     if (typeof opts.model === 'string' && opts.model.length > 0) {
       await switchModelIfRequested(opts.model);
     }
+    if (sessionFlavor === 'cursor') {
+      let lastMetadataPermissionMode: string | undefined;
+      const handleMetadataChange = createSerialAsyncHandler(async ({ updatedMetadata, initial, order }: { updatedMetadata: Metadata; initial: boolean; order: number }) => {
+        const requestedMode = updatedMetadata.permissionMode;
+        if (shouldExit || typeof requestedMode !== 'string' || requestedMode === lastMetadataPermissionMode) return;
+        const knownMode = normalizeComparable(requestedMode) === 'yolo'
+          || (modeSelector && resolveRequestedCode(modeSelector.options, requestedMode))
+          || (legacyModes && resolveRequestedLegacyModeCode(legacyModes, requestedMode));
+        if (!knownMode) return;
+        lastMetadataPermissionMode = requestedMode;
+        // Registration replays a persisted baseline, not a new mobile pick.
+        if (initial && opts.permissionMode) return;
+        metadataPermissionMode = requestedMode;
+        const selectionOrder = initial ? 0 : order;
+        metadataPermissionModeOrder = selectionOrder;
+        if (selectionOrder >= currentPermissionModeOrder) {
+          currentPermissionMode = requestedMode;
+          currentPermissionModeOrder = selectionOrder;
+        }
+        await switchPermissionModeIfRequested(requestedMode, selectionOrder);
+      }, (error) => {
+        logger.debug('[cursor] Failed to apply permission mode from session metadata:', error);
+      });
+      let registeringObserver = true;
+      session.onMetadataChange((updatedMetadata) => handleMetadataChange({ updatedMetadata, initial: registeringObserver, order: ++permissionNotificationOrder }));
+      registeringObserver = false;
+    }
     if (verbose) {
       if (!sawSlashCommands) {
         logAcp('muted', `Outgoing slash commands from ${opts.agentName}: not reported yet`);
@@ -1267,9 +1349,9 @@ export async function runAcp(opts: {
           acpSessionId = reset.sessionId;
           appendSystemPromptInjected = false;
           await syncCursorSessionId(acpSessionId);
-          const targetPermissionMode = batch.mode.permissionMode ?? currentPermissionMode;
+          const targetPermissionMode = permissionModeForBatch(batch.mode) ?? currentPermissionMode;
           if (typeof targetPermissionMode === 'string' && targetPermissionMode.length > 0) {
-            await switchPermissionModeIfRequested(targetPermissionMode);
+            await switchPermissionModeIfRequested(targetPermissionMode, Math.max(batch.mode.permissionModeOrder ?? 0, metadataPermissionModeOrder));
           }
           const targetModel = batch.mode.model ?? currentModel;
           if (typeof targetModel === 'string' && targetModel.length > 0) {
@@ -1298,8 +1380,9 @@ export async function runAcp(opts: {
       sendEnvelopes(sessionManager.startTurn());
       const turnEnded = waitForTurnEnd();
       try {
-        if (typeof batch.mode.permissionMode === 'string' && batch.mode.permissionMode.length > 0) {
-          await switchPermissionModeIfRequested(batch.mode.permissionMode);
+        const targetPermissionMode = permissionModeForBatch(batch.mode);
+        if (typeof targetPermissionMode === 'string' && targetPermissionMode.length > 0) {
+          await switchPermissionModeIfRequested(targetPermissionMode, Math.max(batch.mode.permissionModeOrder ?? 0, metadataPermissionModeOrder));
         }
         if (typeof batch.mode.model === 'string' && batch.mode.model.length > 0) {
           await switchModelIfRequested(batch.mode.model);
@@ -1354,6 +1437,7 @@ export async function runAcp(opts: {
       }
     }
   } finally {
+    shouldExit = true;
     clearInterval(keepAliveInterval);
     reconnectionHandle?.cancel();
     clearPendingTurn(new Error('ACP runner shutting down'));

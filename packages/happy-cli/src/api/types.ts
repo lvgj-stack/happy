@@ -302,6 +302,8 @@ export type Metadata = {
   currentModelCode?: string,
   operatingModes?: Array<{ code: string; value: string; description?: string | null }>,
   currentOperatingModeCode?: string,
+  /** Permission mode selected by the mobile composer and synced through metadata. */
+  permissionMode?: string | null,
   thoughtLevels?: Array<{ code: string; value: string; description?: string | null }>,
   currentThoughtLevelCode?: string,
   path: string,

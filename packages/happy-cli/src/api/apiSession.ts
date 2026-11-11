@@ -68,6 +68,12 @@ type V3GetSessionMessagesResponse = {
     hasMore: boolean;
 };
 
+type SessionMetadataPage = {
+    sessions: Array<{ id: string; metadata: string; metadataVersion: number }>;
+    hasNext: boolean;
+    nextCursor: string | null;
+};
+
 type V3PostSessionMessagesResponse = {
     messages: Array<{
         id: string;
@@ -197,6 +203,7 @@ export class ApiSessionClient extends EventEmitter {
     readonly sessionId: string;
     private metadata: Metadata | null;
     private metadataVersion: number;
+    private metadataChangeCallback: ((metadata: Metadata) => void) | null = null;
     private agentState: AgentState | null;
     private agentStateVersion: number;
     private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -254,6 +261,7 @@ export class ApiSessionClient extends EventEmitter {
     private pendingOutbox: Array<{ content: string; localId: string }> = [];
     private readonly sendSync: InvalidateSync;
     private readonly receiveSync: InvalidateSync;
+    private readonly metadataSync: InvalidateSync;
     private reconnectCapabilityHeld = false;
 
     constructor(token: string, session: Session) {
@@ -268,6 +276,7 @@ export class ApiSessionClient extends EventEmitter {
         this.encryptionVariant = session.encryptionVariant;
         this.sendSync = new InvalidateSync(() => this.flushOutbox());
         this.receiveSync = new InvalidateSync(() => this.fetchMessages());
+        this.metadataSync = new InvalidateSync(() => this.fetchMetadata());
 
         // Initialize RPC handler manager
         this.rpcHandlerManager = new RpcHandlerManager({
@@ -309,6 +318,7 @@ export class ApiSessionClient extends EventEmitter {
             this.clearReconnectTimers();
             this.rpcHandlerManager.onSocketConnect(this.socket);
             this.receiveSync.invalidate();
+            if (this.metadataChangeCallback) this.metadataSync.invalidate();
         })
 
         // Set up global RPC request handler
@@ -361,6 +371,7 @@ export class ApiSessionClient extends EventEmitter {
                     if (data.body.metadata && data.body.metadata.version > this.metadataVersion) {
                         this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
                         this.metadataVersion = data.body.metadata.version;
+                        this.metadataChangeCallback?.(this.metadata!);
                         // Check if session was archived from web/mobile
                         const meta = this.metadata as any;
                         if (meta?.lifecycleState === 'archiveRequested' || meta?.lifecycleState === 'archived') {
@@ -694,6 +705,32 @@ export class ApiSessionClient extends EventEmitter {
         }
     }
 
+    /** Recover mode picks missed while the socket was disconnected. */
+    private async fetchMetadata() {
+        if (this.closed || !this.metadataChangeCallback) return;
+        let cursor: string | undefined;
+        while (!this.closed) {
+            const response = await axios.get<SessionMetadataPage>(`${configuration.serverUrl}/v2/sessions`, {
+                params: { limit: 200, ...(cursor ? { cursor } : {}) },
+                headers: this.authHeaders(),
+                timeout: 10000,
+            });
+            if (this.closed) return;
+            const page = response.data;
+            const found = page.sessions?.find((item) => item.id === this.sessionId);
+            if (found) {
+                if (found.metadataVersion > this.metadataVersion) {
+                    this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(found.metadata));
+                    this.metadataVersion = found.metadataVersion;
+                    this.metadataChangeCallback?.(this.metadata!);
+                }
+                return;
+            }
+            if (!page.hasNext || !page.nextCursor || page.nextCursor === cursor) return;
+            cursor = page.nextCursor;
+        }
+    }
+
     private static readonly MAX_OUTBOX_BATCH_SIZE = 50;
 
     private async flushOutbox() {
@@ -977,18 +1014,29 @@ export class ApiSessionClient extends EventEmitter {
         this.skipInitialMessages = true;
     }
 
+    /** Observe the current metadata and subsequent changes, including mobile mode picks. */
+    onMetadataChange(handler: (metadata: Metadata) => void) {
+        this.metadataChangeCallback = handler;
+        if (this.metadata) handler(this.metadata);
+        if (this.socket.connected) this.metadataSync.invalidate();
+    }
+
     updateMetadata(handler: (metadata: Metadata) => Metadata) {
         this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
                 const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
                 if (answer.result === 'success') {
-                    this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
-                    this.metadataVersion = answer.version;
+                    if (answer.version >= this.metadataVersion) {
+                        this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                        this.metadataVersion = answer.version;
+                        this.metadataChangeCallback?.(this.metadata!);
+                    }
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.metadataVersion) {
                         this.metadataVersion = answer.version;
                         this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.metadata));
+                        this.metadataChangeCallback?.(this.metadata!);
                     }
                     throw new Error('Metadata version mismatch');
                 } else if (answer.result === 'error') {
@@ -1053,6 +1101,7 @@ export class ApiSessionClient extends EventEmitter {
         logger.debug('[API] socket.close() called');
         this.sendSync.stop();
         this.receiveSync.stop();
+        this.metadataSync.stop();
         this.clearReconnectTimers();
         this.socket.close();
         if (this.reconnectCapabilityHeld) {

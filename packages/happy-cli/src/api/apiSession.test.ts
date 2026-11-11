@@ -161,6 +161,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
         mockShouldReconnect.mockReturnValue(true);
         socketHandlers = {};
         session = makeSession();
+        mockAxiosGet.mockReset().mockResolvedValue({ data: { sessions: [], hasNext: false, nextCursor: null, messages: [], hasMore: false } });
         mockSocket = {
             connected: true,
             connect: vi.fn(),
@@ -194,6 +195,88 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(mockSocket.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
         expect(mockSocket.on).toHaveBeenCalledWith('update', expect.any(Function));
         expect(mockSocket.connect).toHaveBeenCalledTimes(1);
+    });
+
+    it('observes mobile metadata picks and ignores stale versions', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const changed = vi.fn();
+        client.onMetadataChange(changed);
+        expect(changed).toHaveBeenCalledWith(session.metadata);
+
+        const metadata = { ...session.metadata, permissionMode: 'yolo' };
+        const update = (version: number) => ({
+            id: 'mode-update', seq: 1, createdAt: Date.now(),
+            body: { t: 'update-session', id: session.id, metadata: {
+                version, value: encryptContent(session, metadata),
+            } },
+        });
+        emitSocketEvent('update', update(1));
+        expect(changed).toHaveBeenLastCalledWith(metadata);
+        expect(changed).toHaveBeenCalledTimes(2);
+        emitSocketEvent('update', update(1));
+        emitSocketEvent('update', update(0));
+        expect(changed).toHaveBeenCalledTimes(2);
+        await client.close();
+    });
+
+    it('observes metadata returned by conflicts and successful writes', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const changed = vi.fn();
+        client.onMetadataChange(changed);
+        const remote = { ...session.metadata, permissionMode: 'yolo' };
+        mockSocket.emitWithAck
+            .mockResolvedValueOnce({ result: 'version-mismatch', version: 1, metadata: encryptContent(session, remote) })
+            .mockResolvedValueOnce({ result: 'success', version: 2, metadata: encryptContent(session, remote) });
+        client.updateMetadata((metadata) => ({ ...metadata, currentOperatingModeCode: 'agent' }));
+        await waitForCheck(() => expect(changed).toHaveBeenCalledTimes(3));
+        expect(changed.mock.calls.slice(1).map(([metadata]) => metadata.permissionMode)).toEqual(['yolo', 'yolo']);
+        await client.close();
+    });
+
+    it('keeps a newer mobile mode when an older metadata write acknowledgement arrives', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const changed = vi.fn();
+        client.onMetadataChange(changed);
+        let acknowledge!: (answer: unknown) => void;
+        mockSocket.emitWithAck.mockImplementationOnce(() => new Promise((resolve) => { acknowledge = resolve; }));
+        client.updateMetadata((metadata) => ({ ...metadata, currentOperatingModeCode: 'agent' }));
+        await waitForCheck(() => expect(acknowledge).toBeTypeOf('function'));
+
+        const mobile = { ...session.metadata, permissionMode: 'yolo' };
+        emitSocketEvent('update', {
+            id: 'new-mode', seq: 1, createdAt: Date.now(),
+            body: { t: 'update-session', id: session.id, metadata: { version: 2, value: encryptContent(session, mobile) } },
+        });
+        acknowledge({ result: 'success', version: 1, metadata: encryptContent(session, session.metadata) });
+        const inspect = vi.fn((metadata) => metadata);
+        client.updateMetadata(inspect);
+        await waitForCheck(() => expect(inspect).toHaveBeenCalledWith(mobile));
+        expect(changed).toHaveBeenCalledTimes(2);
+        client.onMetadataChange(changed);
+        expect(changed).toHaveBeenLastCalledWith(mobile);
+        await client.close();
+    });
+
+    it('catches up metadata on reconnect, including a session beyond the first page', async () => {
+        mockSocket.connected = false;
+        const mobile = { ...session.metadata, permissionMode: 'yolo' };
+        mockAxiosGet.mockImplementation(async (url, config) => {
+            if (url.endsWith('/messages')) return { data: { messages: [], hasMore: false } };
+            if (!config.params.cursor) return { data: {
+                sessions: [{ id: 'other-session', metadata: encryptContent(session, session.metadata), metadataVersion: 1 }],
+                hasNext: true, nextCursor: 'cursor_v1_other-session',
+            } };
+            return { data: { sessions: [{ id: session.id, metadata: encryptContent(session, mobile), metadataVersion: 2 }], hasNext: false, nextCursor: null } };
+        });
+        const client = new ApiSessionClient('fake-token', session);
+        const changed = vi.fn();
+        client.onMetadataChange(changed);
+        mockSocket.connected = true;
+        emitSocketEvent('connect');
+        await waitForCheck(() => expect(changed).toHaveBeenLastCalledWith(mobile));
+        expect(client.getMetadata()).toEqual(mobile);
+        expect(mockAxiosGet.mock.calls.filter(([url]) => url === 'https://server.test/v2/sessions')).toHaveLength(2);
+        await client.close();
     });
 
     it('retries after initial socket connection error', async () => {

@@ -19,6 +19,7 @@ function makeRealSession() {
     return {
         sessionId: 'real-session',
         onUserMessage: vi.fn(),
+        onMetadataChange: vi.fn(),
         rpcHandlerManager: { registerHandler: vi.fn() },
     };
 }
@@ -67,6 +68,17 @@ describe('setupOfflineReconnection', () => {
 
         expect(realSession.rpcHandlerManager.registerHandler).toHaveBeenCalledWith('abort', abort);
         expect(realSession.rpcHandlerManager.registerHandler).toHaveBeenCalledWith('killSession', kill);
+    });
+
+    it('re-attaches the metadata observer so Cursor mode picks survive reconnecting', async () => {
+        const realSession = makeRealSession();
+        const { result } = setupOffline(realSession);
+        const handler = vi.fn();
+
+        result.session.onMetadataChange(handler);
+        await capturedOnReconnected!();
+
+        expect(realSession.onMetadataChange).toHaveBeenCalledWith(handler);
     });
 
     it('attaches handlers before handing the real session to the caller', async () => {

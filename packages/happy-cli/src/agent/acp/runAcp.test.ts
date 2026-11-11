@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const sessionHandlers = new Map<string, (params: any) => Promise<any> | any>();
   let userMessageHandler: ((message: any) => void) | null = null;
+  let metadataChangeHandler: ((metadata: any) => void) | null = null;
   let fileEventHandler: ((event: any) => void) | null = null;
   let pendingDownloads: Array<Promise<any>> = [];
   let killHandler: (() => Promise<void>) | null = null;
 
   const mockSession = {
+    onMetadataChange: vi.fn((handler: (metadata: any) => void) => {
+      metadataChangeHandler = handler;
+    }),
     onUserMessage: vi.fn((handler: (message: any) => void) => {
       userMessageHandler = handler;
     }),
@@ -76,6 +80,8 @@ const mocks = vi.hoisted(() => {
     mockConsoleLog: vi.spyOn(console, 'log').mockImplementation(() => {}),
     sessionHandlers,
     getUserMessageHandler: () => userMessageHandler,
+    getMetadataChangeHandler: () => metadataChangeHandler,
+    resetMetadataChangeHandler: () => { metadataChangeHandler = null; },
     getFileEventHandler: () => fileEventHandler,
     resetFileEvents: () => {
       fileEventHandler = null;
@@ -247,6 +253,7 @@ describe('runAcp', () => {
     vi.clearAllMocks();
     mocks.sessionHandlers.clear();
     mocks.setUserMessageHandler(null);
+    mocks.resetMetadataChangeHandler();
     mocks.setKillHandler(null);
     mocks.backendState.listeners = [];
     mocks.backendState.prompts = [];
@@ -1089,6 +1096,232 @@ describe('runAcp', () => {
 
     await mocks.getKillHandler()!();
     await runPromise;
+  });
+
+  it('applies Cursor metadata mode picks without another message and approves tools already waiting', async () => {
+    mocks.backendState.startSessionMessages = [{
+      type: 'event',
+      name: 'config_options_update',
+      payload: { configOptions: [{
+        type: 'select', id: 'mode', name: 'Mode', category: 'mode', currentValue: 'agent',
+        options: [{ value: 'agent', name: 'Agent' }, { value: 'plan', name: 'Plan' }],
+      }] },
+    }];
+    let agentState: any = {};
+    mocks.mockSession.updateAgentState.mockImplementation((updater) => {
+      agentState = updater(agentState);
+    });
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'],
+    });
+    await vi.waitFor(() => expect(mocks.getMetadataChangeHandler()).toBeTypeOf('function'));
+
+    const permissions = mocks.backendState.constructorArgs.permissionHandler;
+    const waiting = permissions.handleToolCall('waiting', 'execute', { command: 'pwd' });
+    expect(agentState.requests.waiting).toBeDefined();
+
+    mocks.getMetadataChangeHandler()!({ permissionMode: 'yolo' });
+    await expect(waiting).resolves.toEqual({ decision: 'approved' });
+    expect(agentState.requests).toEqual({});
+    expect(agentState.completedRequests.waiting).toMatchObject({ status: 'approved', decision: 'approved' });
+    await expect(permissions.handleToolCall('next', 'execute', { command: 'ls' }))
+      .resolves.toEqual({ decision: 'approved' });
+    expect(mocks.backendState.prompts).toHaveLength(0);
+
+    // Unrelated metadata must not reset the user's selection.
+    mocks.getMetadataChangeHandler()!({ currentOperatingModeCode: 'agent' });
+    mocks.getMetadataChangeHandler()!({ permissionMode: 'agent' });
+    await vi.waitFor(() => expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[cursor] Auto-approve mode set to: false'));
+    const asksAgain = permissions.handleToolCall('asks-again', 'execute', { command: 'pwd' });
+    expect(agentState.requests['asks-again']).toBeDefined();
+    await mocks.sessionHandlers.get('permission')!({ id: 'asks-again', approved: true });
+    await expect(asksAgain).resolves.toEqual({ decision: 'approved' });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+  });
+
+  it('unblocks an active Cursor prompt when a queued message already requested yolo', async () => {
+    let agentState: any = {};
+    mocks.mockSession.updateAgentState.mockImplementation((updater) => { agentState = updater(agentState); });
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      if (mocks.backendState.prompts.length === 1) {
+        await mocks.backendState.constructorArgs.permissionHandler.handleToolCall('blocked', 'execute', { command: 'pwd' });
+      }
+      emit({ type: 'status', status: 'idle' });
+    };
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'],
+    });
+    await vi.waitFor(() => expect(mocks.getMetadataChangeHandler()).toBeTypeOf('function'));
+    mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Run pwd' } });
+    await vi.waitFor(() => expect(agentState.requests.blocked).toBeDefined());
+    mocks.getUserMessageHandler()!({
+      role: 'user', content: { type: 'text', text: 'Keep going' }, meta: { permissionMode: 'yolo' },
+    });
+    await vi.waitFor(() => expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[cursor] Requested ACP permission mode: yolo'));
+    mocks.getMetadataChangeHandler()!({ permissionMode: 'yolo' });
+    await vi.waitFor(() => expect(mocks.backendState.prompts).toHaveLength(2));
+    expect(agentState.requests).toEqual({});
+    expect(agentState.completedRequests.blocked).toMatchObject({ decision: 'approved' });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+  });
+
+  it.each([false, true])('keeps a newer live Agent pick when an older yolo message leaves the queue (awaiting attachments: %s)', async (awaitingAttachments) => {
+    mocks.backendState.startSessionMessages = [{
+      type: 'event', name: 'config_options_update', payload: { configOptions: [{
+        type: 'select', id: 'mode', name: 'Mode', category: 'mode', currentValue: 'agent',
+        options: [{ value: 'agent', name: 'Agent' }],
+      }] },
+    }];
+    let finishFirst!: () => void;
+    let finishAttachments: ((images: never[]) => void) | undefined;
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      if (mocks.backendState.prompts.length === 1) await new Promise<void>((resolve) => { finishFirst = resolve; });
+      emit({ type: 'status', status: 'idle' });
+    };
+    let agentState: any = {};
+    mocks.mockSession.updateAgentState.mockImplementation((updater) => { agentState = updater(agentState); });
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'], permissionMode: 'yolo',
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.getMetadataChangeHandler()).toBeTypeOf('function'));
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'First' } });
+      await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+      if (awaitingAttachments) {
+        mocks.mockSession.drainAttachmentsForUserMessage.mockImplementationOnce(() => new Promise((resolve) => { finishAttachments = resolve; }));
+      }
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Queued' }, meta: { permissionMode: 'yolo' } });
+      await vi.waitFor(() => awaitingAttachments
+        ? expect(finishAttachments).toBeTypeOf('function')
+        : expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[cursor] Requested ACP permission mode: yolo'));
+      mocks.getMetadataChangeHandler()!({ permissionMode: 'agent' });
+      await vi.waitFor(() => expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[cursor] Auto-approve mode set to: false'));
+      finishAttachments?.([]);
+      finishFirst();
+      await vi.waitFor(() => expect(mocks.backendState.prompts).toHaveLength(2));
+      const permissions = mocks.backendState.constructorArgs.permissionHandler;
+      const waiting = permissions.handleToolCall('after-queue', 'execute', { command: 'pwd' });
+      expect(agentState.requests['after-queue']).toBeDefined();
+      await mocks.sessionHandlers.get('permission')!({ id: 'after-queue', approved: true });
+      await expect(waiting).resolves.toEqual({ decision: 'approved' });
+    } finally {
+      finishAttachments?.([]);
+      finishFirst?.();
+      await mocks.getKillHandler()!();
+      await runPromise;
+    }
+  });
+
+  it('preserves explicit Cursor startup Yolo over an older metadata baseline', async () => {
+    mocks.backendState.startSessionMessages = [{
+      type: 'event', name: 'config_options_update', payload: { configOptions: [{
+        type: 'select', id: 'mode', name: 'Mode', category: 'mode', currentValue: 'agent',
+        options: [{ value: 'agent', name: 'Agent' }],
+      }] },
+    }];
+    mocks.mockSession.onMetadataChange.mockImplementationOnce((handler) => {
+      handler({ path: '/repo', permissionMode: 'agent' });
+    });
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'], permissionMode: 'yolo',
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.mockSession.onMetadataChange).toHaveBeenCalled());
+      // Wait until the initial observer notification has been handled.
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Run a tool' } });
+      await vi.waitFor(() => expect(mocks.backendState.prompts).toHaveLength(1));
+      const permissions = mocks.backendState.constructorArgs.permissionHandler;
+      let decision: unknown;
+      const request = permissions.handleToolCall('startup', 'execute', { command: 'pwd' }).then((result: unknown) => { decision = result; });
+      request.catch(() => {});
+      await Promise.resolve();
+      expect(decision).toEqual({ decision: 'approved' });
+      await request;
+    } finally {
+      await mocks.getKillHandler()!();
+      await runPromise;
+    }
+  });
+
+  it('still batches queued Cursor messages with the same permission selection', async () => {
+    let finishFirst!: () => void;
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      if (mocks.backendState.prompts.length === 1) await new Promise<void>((resolve) => { finishFirst = resolve; });
+      emit({ type: 'status', status: 'idle' });
+    };
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'], permissionMode: 'yolo',
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.getMetadataChangeHandler()).toBeTypeOf('function'));
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'First' } });
+      await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Second' } });
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Third' } });
+      await vi.waitFor(() => expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[MessageQueue2] push() completed. Queue size: 2'));
+      finishFirst();
+      await vi.waitFor(() => expect(mocks.backendState.prompts.at(-1)?.prompt).toContain('Third'));
+      expect(mocks.backendState.prompts).toHaveLength(2);
+      expect(mocks.backendState.prompts[1].prompt).toContain('Second');
+    } finally {
+      finishFirst?.();
+      await mocks.getKillHandler()!();
+      await runPromise;
+    }
+  });
+
+  it('keeps the newer message mode after an older metadata RPC completes', async () => {
+    const modes = [{ value: 'agent', name: 'Agent' }, { value: 'plan', name: 'Plan' }];
+    const configUpdate = (currentValue: string) => ({
+      type: 'event', name: 'config_options_update', payload: { configOptions: [{
+        type: 'select', id: 'mode', name: 'Mode', category: 'mode', currentValue, options: modes,
+      }] },
+    });
+    mocks.backendState.startSessionMessages = [configUpdate('agent')];
+    const { AcpBackend } = await import('./AcpBackend');
+    let finishConfig!: () => void;
+    const configSpy = vi.spyOn(AcpBackend.prototype, 'setSessionConfigOption').mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishConfig = resolve; });
+      // The real backend publishes the completed RPC's config before returning.
+      for (const listener of mocks.backendState.listeners) listener(configUpdate('plan'));
+      return true;
+    });
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor', command: 'cursor-agent', args: ['acp'],
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.getMetadataChangeHandler()).toBeTypeOf('function'));
+      mocks.getMetadataChangeHandler()!({ permissionMode: 'plan' });
+      await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+      mocks.getMetadataChangeHandler()!({ permissionMode: 'agent' });
+      mocks.getUserMessageHandler()!({ role: 'user', content: { type: 'text', text: 'Newer Yolo' }, meta: { permissionMode: 'yolo' } });
+      await vi.waitFor(() => expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('[cursor] Requested ACP permission mode: yolo'));
+      finishConfig();
+      await vi.waitFor(() => expect(configSpy).toHaveBeenCalledWith('mode', 'agent'));
+      await vi.waitFor(() => expect(mocks.backendState.prompts).toHaveLength(1));
+      let decision: unknown;
+      const request = mocks.backendState.constructorArgs.permissionHandler.handleToolCall('after-rpc', 'execute', { command: 'pwd' })
+        .then((result: unknown) => { decision = result; });
+      request.catch(() => {});
+      await Promise.resolve();
+      expect(decision).toEqual({ decision: 'approved' });
+      await request;
+    } finally {
+      finishConfig?.();
+      await mocks.getKillHandler()!();
+      await runPromise;
+      configSpy.mockRestore();
+    }
   });
 
   it('reconnects in-place via HAPPY_RECONNECT_* env vars, forwards resumeAgentSessionId, writes cursorSessionId, and announces fallback if loadSession failed', async () => {

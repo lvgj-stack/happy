@@ -39,4 +39,25 @@ describe('daemon spawn mode arguments', () => {
     expect(shouldForwardDaemonPermissionMode('codex', 'default')).toBe(true);
     expect(shouldForwardDaemonPermissionMode('claude', 'default')).toBe(false);
   });
+
+  it.each(['agent', 'plan', 'ask', 'yolo'])('forwards the selected Cursor %s mode at startup', (permissionMode) => {
+    const args: string[] = [];
+
+    appendDaemonSpawnModeArgs(args, { directory: '/repo', permissionMode }, 'cursor');
+
+    expect(args).toEqual(['--permission-mode', permissionMode]);
+  });
+
+  it('forwards a Cursor model without adding an unsupported effort argument', () => {
+    const args: string[] = [];
+
+    appendDaemonSpawnModeArgs(args, {
+      directory: '/repo',
+      permissionMode: 'yolo',
+      modelMode: 'composer-2.5',
+      effortLevel: 'medium',
+    }, 'cursor');
+
+    expect(args).toEqual(['--permission-mode', 'yolo', '--model', 'composer-2.5']);
+  });
 });
