@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   CURSOR_BIN,
   findCursorBin,
+  isCursorSpuriousStreamCloseChunk,
   isLikelyCursorAuthError,
   resolveCursorBin,
 } from './constants';
@@ -93,5 +94,37 @@ describe('isLikelyCursorAuthError', () => {
     expect(isLikelyCursorAuthError('{"code":-32000,"message":"Rate limit exceeded"}')).toBe(false);
     expect(isLikelyCursorAuthError('spawn cursor-agent ENOENT')).toBe(false);
     expect(isLikelyCursorAuthError(undefined)).toBe(false);
+  });
+});
+
+describe('isCursorSpuriousStreamCloseChunk', () => {
+  it('matches the exact trailing WritableIterable stream-teardown error chunks from cursor-agent acp', () => {
+    expect(isCursorSpuriousStreamCloseChunk('\n\nError: RetriableError: WritableIterable is closed')).toBe(true);
+    expect(isCursorSpuriousStreamCloseChunk('\n\nError: WriteIterableClosedError: WritableIterable is closed')).toBe(true);
+    expect(isCursorSpuriousStreamCloseChunk('\n\nError: LostConnection: WritableIterable is closed')).toBe(true);
+    expect(isCursorSpuriousStreamCloseChunk('\n\nError: RetriableError: cannot write, WritableIterable already closed')).toBe(true);
+  });
+
+  it('does not match real Cursor ACP errors or normal assistant markdown mentioning the error', () => {
+    expect(
+      isCursorSpuriousStreamCloseChunk(
+        '\n\nError: [unauthenticated] Backend rejected authentication. Verify this is a User API Key.',
+      ),
+    ).toBe(false);
+    expect(
+      isCursorSpuriousStreamCloseChunk(
+        '\n\nError: RetriableError: Stream ended without turnEnded — connection likely dropped mid-stream',
+      ),
+    ).toBe(false);
+    expect(isCursorSpuriousStreamCloseChunk('\n\nError: RetriableError: Connection failed')).toBe(false);
+    expect(isCursorSpuriousStreamCloseChunk('\n\nPlease sign in to continue')).toBe(false);
+    expect(isCursorSpuriousStreamCloseChunk('Error: RetriableError: WritableIterable is closed')).toBe(false);
+    expect(
+      isCursorSpuriousStreamCloseChunk(
+        'The error `Error: RetriableError: WritableIterable is closed` occurs during teardown.',
+      ),
+    ).toBe(false);
+    expect(isCursorSpuriousStreamCloseChunk('')).toBe(false);
+    expect(isCursorSpuriousStreamCloseChunk(undefined)).toBe(false);
   });
 });

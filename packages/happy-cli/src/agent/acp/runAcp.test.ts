@@ -1039,4 +1039,72 @@ describe('runAcp', () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it('filters spurious trailing WritableIterable stream-close error chunks for cursor while preserving real error chunks', async () => {
+    let promptCall = 0;
+    mocks.backendState.sendPromptImpl = async (emit) => {
+      promptCall += 1;
+      emit({ type: 'status', status: 'running' });
+      if (promptCall === 1) {
+        emit({ type: 'model-output', textDelta: 'Clean reply.' });
+        emit({
+          type: 'model-output',
+          textDelta: '\n\nError: RetriableError: WritableIterable is closed',
+        });
+      } else {
+        emit({ type: 'model-output', textDelta: 'Partial reply.' });
+        emit({
+          type: 'model-output',
+          textDelta: '\n\nError: RetriableError: Connection failed',
+        });
+      }
+      emit({ type: 'status', status: 'idle' });
+    };
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: '/root/.local/bin/cursor-agent',
+      args: ['acp'],
+      verbose: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'First turn' },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+    });
+
+    mocks.mockSession.sendSessionEvent.mockClear();
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Second turn' },
+    });
+    await vi.waitFor(() => {
+      expect(mocks.mockSession.sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    const textEnvelopes = mocks.mockSession.sendSessionProtocolMessage.mock.calls
+      .map(([envelope]) => envelope)
+      .filter((envelope) => envelope.ev.t === 'text')
+      .map((envelope) => envelope.ev.text);
+
+    expect(textEnvelopes).toEqual([
+      'Clean reply.',
+      'Partial reply.\n\nError: RetriableError: Connection failed',
+    ]);
+    expect(consoleLines()).toContain('Filtered spurious stream-close error chunk from cursor');
+    expect(consoleLines()).not.toContain(
+      'Outgoing message: "\\n\\nError: RetriableError: WritableIterable is closed"',
+    );
+  });
 });

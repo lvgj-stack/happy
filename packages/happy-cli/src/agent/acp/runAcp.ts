@@ -22,7 +22,7 @@ import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { projectPath } from '@/projectPath';
 import { BasePermissionHandler, type PermissionResult } from '@/utils/BasePermissionHandler';
 import { connectionState } from '@/utils/serverConnectionErrors';
-import { isLikelyCursorAuthError } from '@/cursor/constants';
+import { isCursorSpuriousStreamCloseChunk, isLikelyCursorAuthError } from '@/cursor/constants';
 import {
   extractConfigOptionsFromPayload,
   extractCurrentModeIdFromPayload,
@@ -518,6 +518,11 @@ export async function runAcp(opts: {
   });
 
   const sessionFlavor = resolveSessionFlavor(opts.agentName);
+  const commandExecutable = opts.command.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+  const isCursorAgent = sessionFlavor === 'cursor'
+    || commandExecutable === 'cursor-agent'
+    || commandExecutable === 'cursor-agent.exe'
+    || commandExecutable === 'cursor-agent.cmd';
   const { state, metadata } = createSessionMetadata({
     flavor: sessionFlavor,
     machineId: settings.machineId,
@@ -841,6 +846,26 @@ export async function runAcp(opts: {
   const onBackendMessage = (msg: AgentMessage) => {
     if (verbose) {
       logAcp('muted', `Outgoing raw backend message from ${opts.agentName}: ${formatUnknownForConsole(msg, ACP_RAW_PREVIEW_CHARS)}`);
+    }
+
+    // cursor-agent (verified on 2026.11.10-731fb78) has a ConnectRPC bidirectional
+    // stream teardown race after turnEnded where ClientExecController writes to an
+    // already-closed WritableIterable; ACP mode lacks enableAgentRetries and emits
+    // "\n\nError: RetriableError: WritableIterable is closed" as a trailing
+    // agent_message_chunk before returning stopReason="end_turn". Drop that chunk
+    // here while letting AcpBackend's idle timer settle the turn normally.
+    if (
+      isCursorAgent
+      && msg.type === 'model-output'
+      && isCursorSpuriousStreamCloseChunk(msg.textDelta)
+    ) {
+      logger.debug(
+        `[${opts.agentName}] Filtered spurious Cursor ACP stream-teardown chunk: ${JSON.stringify(msg.textDelta)}`,
+      );
+      if (verbose) {
+        logAcp('muted', `Filtered spurious stream-close error chunk from ${opts.agentName}`);
+      }
+      return;
     }
 
     if (msg.type === 'event' && msg.name === 'session_resume_failed') {

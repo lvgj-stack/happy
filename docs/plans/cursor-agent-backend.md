@@ -226,8 +226,12 @@ Claude 的模型；进入会话后模式 chip 显示 Agent / Plan / Ask / Agent 
 
 ## 风险与待确认
 
-- **`WritableIterable is closed` 尾巴**：只出现过一次。P1 实现后多跑几轮看是否复现；能复现就在 runAcp 的
-  消息转发里过滤这一行，并加上 Cursor 版本说明。
+- **`WritableIterable is closed` 尾巴（已修复）**：在 `cursor-agent 2026.11.10-731fb78` 上确认根因——服务端发完
+  `turnEnded` 关闭流后，`streamSplitter.finally` 立即关闭客户端 `WritableIterable`，若 `ClientExecController`
+  尚有异步写入且未收到终态 checkpoint（`ineligible_terminal_turn`），会抛出 `WritableIterable is closed`；ACP
+  模式未开 `enableAgentRetries`，`agent-session` 捕获后将其作为 `"\n\nError: RetriableError: WritableIterable is closed"`
+  的普通 `agent_message_chunk` 发出并返回 `stopReason: "end_turn"`。已在 `runAcp.ts` 消息转发层过滤该噪音块
+  （`isCursorSpuriousStreamCloseChunk`），保留真实鉴权/断流错误。
 - **Cursor ACP 是未公开的子命令**，行为可能随版本变。「已验证的事实」一节是对照基准；集成测试在没有
   `cursor-agent` 或未登录时跳过（同 `codex.integration.test.ts` 的做法）。
 - **模型 id 带参数**（方括号），手机端原样存储、原样回传即可，不要做规范化或截断。
