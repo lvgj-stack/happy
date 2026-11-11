@@ -261,4 +261,66 @@ describe('ApiMachineClient socket reconnection', () => {
 
         client.shutdown();
     });
+
+    it('republishes machine metadata when cliAvailability.cursor changes on heartbeat', async () => {
+        vi.useFakeTimers();
+        const { detectCLIAvailability } = await import('@/utils/detectCLI');
+        const mockedDetect = vi.mocked(detectCLIAvailability);
+        mockedDetect.mockReturnValue({
+            claude: false,
+            codex: false,
+            gemini: false,
+            openclaw: false,
+            agy: false,
+            cursor: false,
+            detectedAt: 1,
+        });
+
+        const machine = makeMachine();
+        const client = new ApiMachineClient('fake-token', machine);
+        const published: Array<Machine['metadata']> = [];
+        vi.spyOn(client, 'updateMachineMetadata').mockImplementation(async (handler) => {
+            const next = handler(machine.metadata);
+            machine.metadata = next;
+            published.push(next);
+        });
+        client.connect();
+        emitSocketEvent('connect');
+        expect(published).toHaveLength(1);
+        expect(published[0].cliAvailability?.cursor).toBe(false);
+
+        // Next heartbeat with no change -> no republish
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(published).toHaveLength(1);
+
+        // Install cursor-agent -> republish true
+        mockedDetect.mockReturnValue({
+            claude: false,
+            codex: false,
+            gemini: false,
+            openclaw: false,
+            agy: false,
+            cursor: true,
+            detectedAt: 2,
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(published).toHaveLength(2);
+        expect(published[1].cliAvailability?.cursor).toBe(true);
+
+        // Uninstall cursor-agent -> republish false
+        mockedDetect.mockReturnValue({
+            claude: false,
+            codex: false,
+            gemini: false,
+            openclaw: false,
+            agy: false,
+            cursor: false,
+            detectedAt: 3,
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(published).toHaveLength(3);
+        expect(published[2].cliAvailability?.cursor).toBe(false);
+
+        client.shutdown();
+    });
 });

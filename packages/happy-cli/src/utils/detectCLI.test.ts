@@ -4,6 +4,7 @@ import os from 'os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { findAgyBin } from '@/agy/constants';
+import { findCursorBin } from '@/cursor/constants';
 import { detectCLIAvailability } from './detectCLI';
 
 vi.mock('child_process', () => ({ execSync: vi.fn() }));
@@ -15,10 +16,12 @@ vi.mock('os', () => ({
   },
 }));
 vi.mock('@/agy/constants', () => ({ findAgyBin: vi.fn() }));
+vi.mock('@/cursor/constants', () => ({ findCursorBin: vi.fn() }));
 
 const mockedExecSync = vi.mocked(execSync);
 const mockedExistsSync = vi.mocked(existsSync);
 const mockedFindAgyBin = vi.mocked(findAgyBin);
+const mockedFindCursorBin = vi.mocked(findCursorBin);
 const mockedPlatform = vi.mocked(os.platform);
 
 describe('CLI availability detection', () => {
@@ -31,6 +34,8 @@ describe('CLI availability detection', () => {
     mockedExistsSync.mockReturnValue(false);
     mockedFindAgyBin.mockReset();
     mockedFindAgyBin.mockReturnValue(undefined);
+    mockedFindCursorBin.mockReset();
+    mockedFindCursorBin.mockReturnValue(undefined);
     mockedPlatform.mockReturnValue('darwin');
   });
 
@@ -40,5 +45,18 @@ describe('CLI availability detection', () => {
     mockedFindAgyBin.mockReturnValue('/home/person/.local/bin/agy');
 
     expect(detectCLIAvailability().agy).toBe(true);
+  });
+
+  it('reports Cursor on both POSIX and Windows via findCursorBin', () => {
+    expect(detectCLIAvailability().cursor).toBe(false);
+
+    mockedFindCursorBin.mockReturnValue('/home/person/.local/bin/cursor-agent');
+    expect(detectCLIAvailability().cursor).toBe(true);
+
+    mockedPlatform.mockReturnValue('win32');
+    expect(detectCLIAvailability().cursor).toBe(true);
+
+    mockedFindCursorBin.mockReturnValue(undefined);
+    expect(detectCLIAvailability().cursor).toBe(false);
   });
 });

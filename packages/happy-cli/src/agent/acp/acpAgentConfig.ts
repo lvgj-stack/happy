@@ -1,3 +1,5 @@
+import { findCursorBin } from '@/cursor/constants';
+
 export type AcpAgentConfig = {
   command: string;
   args: string[];
@@ -6,6 +8,7 @@ export type AcpAgentConfig = {
 export const KNOWN_ACP_AGENTS: Record<string, AcpAgentConfig> = {
   gemini: { command: 'gemini', args: ['--experimental-acp'] },
   opencode: { command: 'opencode', args: ['acp'] },
+  cursor: { command: 'cursor-agent', args: ['acp'] },
 };
 
 export type ResolvedAcpAgentConfig = {
@@ -38,9 +41,12 @@ export function resolveAcpAgentConfig(cliArgs: string[]): ResolvedAcpAgentConfig
       .slice(1)
       // Backward-compatible with old OpenCode docs/flags.
       .filter((arg) => !(agentName === 'opencode' && arg === '--acp'));
+    const command = agentName === 'cursor'
+      ? (findCursorBin() ?? known.command)
+      : known.command;
     return {
       agentName,
-      command: known.command,
+      command,
       args: [...known.args, ...passthroughArgs],
     };
   }

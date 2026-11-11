@@ -21,6 +21,7 @@ import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { projectPath } from '@/projectPath';
 import { BasePermissionHandler, type PermissionResult } from '@/utils/BasePermissionHandler';
 import { connectionState } from '@/utils/serverConnectionErrors';
+import { isLikelyCursorAuthError } from '@/cursor/constants';
 import {
   extractConfigOptionsFromPayload,
   extractCurrentModeIdFromPayload,
@@ -436,14 +437,25 @@ type PendingTurn = {
   timeout: NodeJS.Timeout;
 };
 
-function resolveSessionFlavor(agentName: string): 'gemini' | 'opencode' | 'acp' {
+function resolveSessionFlavor(agentName: string): 'gemini' | 'opencode' | 'cursor' | 'acp' {
   if (agentName === 'gemini') {
     return 'gemini';
   }
   if (agentName === 'opencode') {
     return 'opencode';
   }
+  if (agentName === 'cursor') {
+    return 'cursor';
+  }
   return 'acp';
+}
+
+function formatAcpErrorForSession(agentName: string, detail?: string | null): string {
+  const baseDetail = detail?.trim() || 'The agent stopped because of an unknown error.';
+  if (agentName === 'cursor' && isLikelyCursorAuthError(baseDetail) && !baseDetail.includes('cursor-agent login')) {
+    return `${agentName} error: ${baseDetail}. Run \`cursor-agent login\` to authenticate Cursor CLI.`;
+  }
+  return `${agentName} error: ${baseDetail}`;
 }
 
 export async function runAcp(opts: {
@@ -453,6 +465,9 @@ export async function runAcp(opts: {
   args: string[];
   startedBy?: 'daemon' | 'terminal';
   verbose?: boolean;
+  model?: string;
+  permissionMode?: string;
+  resumeAgentSessionId?: string;
 }): Promise<void> {
   const verbose = opts.verbose === true;
   const sessionTag = randomUUID();
@@ -518,8 +533,8 @@ export async function runAcp(opts: {
   permissionHandler.reset('Previous CLI process exited before responding');
   const sessionManager = new AcpSessionManager();
   const messageQueue = new MessageQueue2<AcpSwitchMode>((mode) => hashObject(mode));
-  let currentPermissionMode: string | undefined;
-  let currentModel: string | null | undefined;
+  let currentPermissionMode: string | undefined = opts.permissionMode;
+  let currentModel: string | null | undefined = opts.model;
   let modeSelector: AcpConfigSelector | null = null;
   let modelSelector: AcpConfigSelector | null = null;
   let legacyModes: SessionModeState | null = null;
@@ -644,6 +659,9 @@ export async function runAcp(opts: {
 
   const switchModelIfRequested = async (requestedModel: string): Promise<void> => {
     if (!requestedModel) {
+      return;
+    }
+    if (opts.agentName === 'cursor' && requestedModel === 'default') {
       return;
     }
 
@@ -831,7 +849,7 @@ export async function runAcp(opts: {
     if (msg.type === 'status' && msg.status === 'error' && envelopes.length === 0) {
       session.sendSessionEvent({
         type: 'message',
-        message: `${opts.agentName} error: ${msg.detail?.trim() || 'The agent stopped because of an unknown error.'}`,
+        message: formatAcpErrorForSession(opts.agentName, msg.detail),
       });
     }
     if (msg.type === 'status' && msg.status === 'error') {
@@ -892,6 +910,12 @@ export async function runAcp(opts: {
   try {
     const started = await backend.startSession();
     acpSessionId = started.sessionId;
+    if (typeof opts.permissionMode === 'string' && opts.permissionMode.length > 0) {
+      await switchPermissionModeIfRequested(opts.permissionMode);
+    }
+    if (typeof opts.model === 'string' && opts.model.length > 0) {
+      await switchModelIfRequested(opts.model);
+    }
     if (verbose) {
       if (!sawSlashCommands) {
         logAcp('muted', `Outgoing slash commands from ${opts.agentName}: not reported yet`);
@@ -944,7 +968,7 @@ export async function runAcp(opts: {
         if (!errorReportedForCurrentTurn) {
           session.sendSessionEvent({
             type: 'message',
-            message: `${opts.agentName} error: ${detail}`,
+            message: formatAcpErrorForSession(opts.agentName, detail),
           });
           errorReportedForCurrentTurn = true;
         }

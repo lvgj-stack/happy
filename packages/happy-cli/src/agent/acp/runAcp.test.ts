@@ -691,4 +691,102 @@ describe('runAcp', () => {
     expect(mocks.backendState.setModeCalls).toEqual([]);
     expect(mocks.backendState.setModelCalls).toEqual([]);
   });
+
+  it('creates session metadata with cursor flavor when agentName is cursor', async () => {
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.startSessionCalls).toBe(1);
+    });
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+
+    expect(mocks.mockGetOrCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          flavor: 'cursor',
+        }),
+      }),
+    );
+  });
+
+  it('applies initial model and permissionMode on startup and ignores default model for cursor', async () => {
+    mocks.backendState.startSessionMessages = [
+      {
+        type: 'event',
+        name: 'config_options_update',
+        payload: {
+          configOptions: [
+            {
+              type: 'select',
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              currentValue: 'agent',
+              options: [
+                { value: 'agent', name: 'Agent' },
+                { value: 'plan', name: 'Plan' },
+                { value: 'ask', name: 'Ask' },
+              ],
+            },
+            {
+              type: 'select',
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'composer-2.5',
+              options: [
+                { value: 'composer-2.5', name: 'Composer 2.5' },
+                { value: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'Claude Opus 5.5' },
+                { value: 'custom-default-named', name: 'Default' },
+              ],
+            },
+          ],
+        },
+      },
+    ];
+
+    const runPromise = runAcp({
+      credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
+      permissionMode: 'plan',
+      model: 'claude-opus-5-5[context=300k,effort=medium,fast=false]',
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getUserMessageHandler()).toBeTypeOf('function');
+    });
+
+    expect(mocks.backendState.setConfigOptionCalls).toEqual([
+      { configId: 'mode', value: 'plan' },
+      { configId: 'model', value: 'claude-opus-5-5[context=300k,effort=medium,fast=false]' },
+    ]);
+
+    mocks.backendState.setConfigOptionCalls = [];
+
+    mocks.getUserMessageHandler()!({
+      role: 'user',
+      content: { type: 'text', text: 'Keep current model when meta.model is default' },
+      meta: {
+        model: 'default',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.backendState.prompts).toHaveLength(1);
+    });
+
+    expect(mocks.backendState.setConfigOptionCalls).toEqual([]);
+
+    await mocks.getKillHandler()!();
+    await runPromise;
+  });
 });

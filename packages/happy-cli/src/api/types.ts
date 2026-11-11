@@ -145,9 +145,10 @@ export const MachineMetadataSchema = z.object({
     codex: z.boolean(),
     gemini: z.boolean(),
     openclaw: z.boolean(),
-    // Optional so metadata written by a CLI predating agy detection still
-    // matches this shape. detectCLIAvailability always reports it.
+    // Optional so metadata written by a CLI predating agy/cursor detection still
+    // matches this shape. detectCLIAvailability always reports them.
     agy: z.boolean().optional(),
+    cursor: z.boolean().optional(),
     detectedAt: z.number(),
   }).optional(),
   resumeSupport: z.object({

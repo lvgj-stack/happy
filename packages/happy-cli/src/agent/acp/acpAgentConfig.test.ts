@@ -1,21 +1,57 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  mockFindCursorBin: vi.fn<() => string | undefined>(),
+}));
+
+vi.mock('@/cursor/constants', () => ({
+  findCursorBin: mocks.mockFindCursorBin,
+}));
+
 import { KNOWN_ACP_AGENTS, resolveAcpAgentConfig } from './acpAgentConfig';
 
 describe('KNOWN_ACP_AGENTS', () => {
-  it('defines built-in Gemini and OpenCode command mappings', () => {
+  beforeEach(() => {
+    mocks.mockFindCursorBin.mockReset();
+    mocks.mockFindCursorBin.mockReturnValue(undefined);
+  });
+
+  it('defines built-in Gemini, OpenCode, and Cursor command mappings', () => {
     expect(KNOWN_ACP_AGENTS).toEqual({
       gemini: { command: 'gemini', args: ['--experimental-acp'] },
       opencode: { command: 'opencode', args: ['acp'] },
+      cursor: { command: 'cursor-agent', args: ['acp'] },
     });
   });
 });
 
 describe('resolveAcpAgentConfig', () => {
+  beforeEach(() => {
+    mocks.mockFindCursorBin.mockReset();
+    mocks.mockFindCursorBin.mockReturnValue(undefined);
+  });
+
   it('resolves known agent names to predefined command + args', () => {
     expect(resolveAcpAgentConfig(['gemini'])).toEqual({
       agentName: 'gemini',
       command: 'gemini',
       args: ['--experimental-acp'],
+    });
+  });
+
+  it('resolves cursor command dynamically via findCursorBin at call time', () => {
+    mocks.mockFindCursorBin.mockReturnValueOnce('/Users/dev/.local/bin/cursor-agent');
+    expect(resolveAcpAgentConfig(['cursor'])).toEqual({
+      agentName: 'cursor',
+      command: '/Users/dev/.local/bin/cursor-agent',
+      args: ['acp'],
+    });
+
+    mocks.mockFindCursorBin.mockReturnValueOnce(undefined);
+    expect(resolveAcpAgentConfig(['cursor'])).toEqual({
+      agentName: 'cursor',
+      command: 'cursor-agent',
+      args: ['acp'],
     });
   });
 

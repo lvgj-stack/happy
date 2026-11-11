@@ -34,6 +34,7 @@ import { extractNoSandboxFlag } from './utils/sandboxFlags'
 import { handleResumeCommand } from '@/resume/handleResumeCommand'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
+import { handleCursorCommand } from './commands/cursorCommand'
 import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
 
 
@@ -473,6 +474,17 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'cursor') {
+    try {
+      await handleCursorCommand(args.slice(1));
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'logout') {
     // Keep for backward compatibility - redirect to auth logout
     console.log(chalk.yellow('Note: "happy logout" is deprecated. Use "happy auth logout" instead.\n'));
@@ -718,6 +730,7 @@ ${chalk.bold('Usage:')}
   happy codex             Start Codex mode
   happy gemini            Start Gemini mode (ACP) [deprecated — use agy]
   happy agy               Start agy (Antigravity CLI) mode
+  happy cursor            Start Cursor CLI mode (ACP)
   happy acp               Start a generic ACP-compatible agent
   happy connect           Connect AI vendor API keys
   happy sandbox           Configure and manage OS-level sandboxing

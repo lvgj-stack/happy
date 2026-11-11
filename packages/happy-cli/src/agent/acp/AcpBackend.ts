@@ -432,11 +432,15 @@ export class AcpBackend implements AgentBackend {
       const signalStartupFailure = (error: Error) => {
         rejectStartupFailure?.(error);
       };
+      const startupStderrChunks: string[] = [];
 
       // Handle stderr output via transport handler
       this.process.stderr.on('data', (data: Buffer) => {
         const text = data.toString();
         if (!text.trim()) return;
+        if (!this.acpSessionId && startupStderrChunks.length < 10) {
+          startupStderrChunks.push(text.trim());
+        }
 
         // Build context for transport handler
         const hasActiveInvestigation = this.transport.isInvestigationTool
@@ -474,9 +478,13 @@ export class AcpBackend implements AgentBackend {
 
       this.process.on('exit', (code, signal) => {
         if (!this.disposed && code !== 0 && code !== null) {
-          signalStartupFailure(new Error(`Exit code: ${code}`));
+          const stderrSummary = !this.acpSessionId && startupStderrChunks.length > 0
+            ? `: ${startupStderrChunks.join(' ').slice(0, 400)}`
+            : '';
+          const detail = `Exit code: ${code}${stderrSummary}`;
+          signalStartupFailure(new Error(detail));
           logger.debug(`[AcpBackend] Process exited with code ${code}, signal ${signal}`);
-          this.emit({ type: 'status', status: 'stopped', detail: `Exit code: ${code}` });
+          this.emit({ type: 'status', status: 'stopped', detail });
         }
       });
 
