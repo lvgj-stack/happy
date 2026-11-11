@@ -323,6 +323,31 @@ The Expo app, EAS OTA workflows and legacy web/Tauri client have been removed.
 Do not invoke their former scripts. A native store release needs the existing
 App Store / Play signing identity and an explicit store build number.
 
+### Android APK package name and push configuration
+
+For a non-Dev APK, use the existing production application ID from
+`packages/happy-android/app/build.gradle.kts` (currently `com.ex3ndr.happy`).
+The visible app name (`app_name`, for example `Happy`) is separate from the
+application ID. Stripping `.dev` from `com.slopus.happy.dev` produces
+`com.slopus.happy`, which has no matching client in the current Firebase
+configuration; it is not a shortcut to a push-enabled non-Dev package.
+
+Before handing over an APK with push notifications, confirm that its actual
+application ID exactly matches a client in
+`packages/happy-android/app/google-services.json`. If the user requests a
+custom ID, it needs a corresponding Firebase Android client/configuration.
+`firebaseResources(applicationId)` otherwise returns no resources: Gradle
+still succeeds, but Firebase cannot initialize, no FCM token is registered,
+and the notification permission prompt is skipped. A deliberately Firebase-free
+CI or offline/UI-only build should be described as having no push support.
+
+Check the built APK's package/name with `aapt2 dump badging` and confirm the
+presence of `google_app_id`, `gcm_defaultSenderId`, `google_api_key`, and
+`project_id` in `aapt2 dump resources`. Inspect resource names without exposing
+API-key values. These packaging checks also apply when the user skips a full
+test run. A test-signed APK using the production ID is still a test artifact;
+keep the signing identity clear in the handoff.
+
 ### Version
 
 Native versions are CalVer `YYYY.M.C` (UTC year, unpadded month, a counter

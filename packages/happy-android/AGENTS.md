@@ -1674,10 +1674,26 @@ and `push/FirebaseStart.kt` starts it where push needs it, off the main
 thread from registration (after the first frame) and in
 `HappyMessagingService.onCreate` for a push that wakes a killed process
 (`FirebaseStartTest`). Anything new that touches FirebaseMessaging calls
-`FirebaseStart.ensure` first. Pushes arrive only if:
+`FirebaseStart.ensure` first.
 
-- the file has clients for `com.ex3ndr.happy`, `com.slopus.happy.preview`
-  and `com.slopus.happy.dev` (happy-app's has all three);
+**APK handoff: package names must match Firebase.** For a non-Dev APK,
+use the existing production application ID (`com.ex3ndr.happy`), with
+`Happy` as the display name. Removing `.dev` from `com.slopus.happy.dev`
+does not provision a Firebase client: with the current configuration a
+`com.slopus.happy` APK builds successfully but contains no Firebase resources
+and receives no push. For an explicitly requested custom ID, obtain its matching
+Firebase Android configuration before describing the APK as push-enabled.
+Before handoff, check the actual APK package/name and the presence of
+`google_app_id`, `gcm_defaultSenderId`, `google_api_key`, and `project_id`;
+do not expose their API-key values. This is a packaging check, independent
+of a full test run. See `.agents/skills/release/SKILL.md`, "Android APK package
+name and push configuration", for the release checklist.
+
+Pushes arrive only if:
+
+- the file has a client matching the APK's actual application ID;
+  the current variants use `com.ex3ndr.happy`, `com.slopus.happy.preview`
+  and `com.slopus.happy.dev` (a custom ID needs its own client);
 - the Expo project above has that Firebase project's FCM V1 service
   account key (happy-app's Android pushes already depend on it; a
   different Firebase project needs its key uploaded to Expo);
