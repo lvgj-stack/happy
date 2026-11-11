@@ -118,6 +118,17 @@ class ComposerModesTest {
         assertEquals(listOf("composer-2.5", "claude-opus-5-5[context=300k,effort=medium,fast=false]"), resolvedCursor.availableModels.map { it.key })
         assertEquals("claude-opus-5-5[context=300k,effort=medium,fast=false]", resolvedCursor.modelMode?.key)
         assertEquals(emptyList<ModeOption>(), resolvedCursor.availableEffortLevels)
+
+        // A configured custom/parameterized Cursor default model stays selectable even when unlisted in metadata.models.
+        val cursorOverrides = com.slopus.happy.model.settings.AgentDefaultOverrides(
+            mapOf(com.slopus.happy.model.settings.AgentKey.Cursor to com.slopus.happy.model.settings.AgentDefaultOverride(modelMode = "claude-opus-5-5[context=1m,effort=high,fast=false]")),
+        )
+        val resolvedWithCustomDefault = ComposerModeResolver.resolve(cursor, ComposerMirror(), cursorOverrides, translate)
+        assertEquals("claude-opus-5-5[context=1m,effort=high,fast=false]", resolvedWithCustomDefault.modelMode?.key)
+        assertEquals(
+            listOf("composer-2.5", "claude-opus-5-5[context=300k,effort=medium,fast=false]", "claude-opus-5-5[context=1m,effort=high,fast=false]"),
+            resolvedWithCustomDefault.availableModels.map { it.key },
+        )
     }
 
     @Test

@@ -91,11 +91,12 @@ fun AgentsScreen(
     onOverridesChange: (AgentDefaultOverrides) -> Unit,
     onMachine: (Machine) -> Unit,
     onBack: () -> Unit,
+    cursorModels: List<ModeOption> = ModeOptions.modelModes(AgentKey.Cursor.wire),
 ) {
     val colors = HappyTheme.colors
     val resources = LocalResources.current
     var expanded by remember { mutableStateOf<Pair<AgentKey, AgentDefaultField>?>(null) }
-    var customModel by remember { mutableStateOf<String?>(null) }
+    var customModel by remember { mutableStateOf<Pair<AgentKey, String>?>(null) }
     val cliVersion = agentDefaultsCliVersion(machines)
     val online = stringResource(R.string.status_online)
     val offline = stringResource(R.string.status_offline)
@@ -128,8 +129,9 @@ fun AgentsScreen(
         val hasOverride = AgentDefaults.hasOverride(overrides, agent.wire, config.field)
         val isExpanded = expanded == agent to config.field
         val detail = if (hasOverride) optionName(config.options, overrideValue) else stringResource(R.string.settings_agents_default, optionName(config.options, effectiveValue))
-        val isCustomCodexModel = agent == AgentKey.Codex && config.field == AgentDefaultField.ModelMode &&
-            !overrideValue.isNullOrEmpty() && config.options.none { it.key == overrideValue }
+        val supportsCustomModel = (agent == AgentKey.Codex || agent == AgentKey.Cursor) && config.field == AgentDefaultField.ModelMode
+        val baseCatalog = if (agent == AgentKey.Cursor) cursorModels else ModeOptions.modelModes(agent.wire)
+        val isCustomModel = supportsCustomModel && !overrideValue.isNullOrEmpty() && baseCatalog.none { it.key == overrideValue }
 
         Item(
             title = config.title,
@@ -142,9 +144,9 @@ fun AgentsScreen(
             for (option in config.options) {
                 Option(option.name, option.description, hasOverride && overrideValue == option.key) { update(agent, config.field, option.key) }
             }
-            if (agent == AgentKey.Codex && config.field == AgentDefaultField.ModelMode) {
-                Option(stringResource(R.string.settings_agents_custom_model), if (isCustomCodexModel) overrideValue else stringResource(R.string.settings_agents_enter_model_id), isCustomCodexModel) {
-                    customModel = if (isCustomCodexModel) overrideValue else ""
+            if (supportsCustomModel) {
+                Option(stringResource(R.string.settings_agents_custom_model), if (isCustomModel) overrideValue else stringResource(R.string.settings_agents_enter_model_id), isCustomModel) {
+                    customModel = agent to (if (isCustomModel) overrideValue.orEmpty() else "")
                 }
             }
         }
@@ -191,9 +193,10 @@ fun AgentsScreen(
             for (agent in configurableAgents) {
                 val code = AgentDefaults.codeDefaults(agent.wire, cliVersion)
                 val effective = AgentDefaults.resolve(overrides, agent.wire, cliVersion)
-                // OpenClaw's lone `default` model is no choice; Codex's is Codex config.
-                val models = ModeOptions.includeConfiguredModel(agent.wire, ModeOptions.modelModes(agent.wire), effective.modelMode)
-                    .filter { it.key != "default" || agent == AgentKey.Codex }
+                val baseModels = if (agent == AgentKey.Cursor) cursorModels else ModeOptions.modelModes(agent.wire)
+                // OpenClaw's lone `default` model is no choice; Codex's is Codex config, and Cursor's is Cursor's own default.
+                val models = ModeOptions.includeConfiguredModel(agent.wire, baseModels, effective.modelMode)
+                    .filter { it.key != "default" || agent == AgentKey.Codex || agent == AgentKey.Cursor }
                 val efforts = ModeOptions.effortLevelsForModel(agent.wire, effective.modelMode)
                 // On Codex config "Use code default" means config.toml's effort, not the code's.
                 val codeEffort = if (AgentDefaults.followsCodexConfig(agent.wire, effective.modelMode)) null else code.effortLevel
@@ -211,17 +214,19 @@ fun AgentsScreen(
         }
     }
 
-    customModel?.let { current ->
+    customModel?.let { (targetAgent, current) ->
+        val titleRes = if (targetAgent == AgentKey.Cursor) R.string.settings_agents_custom_cursor_title else R.string.settings_agents_custom_codex_title
+        val messageRes = if (targetAgent == AgentKey.Cursor) R.string.settings_agents_custom_cursor_message else R.string.settings_agents_custom_codex_message
         PromptModal(
             prompt = Prompt(
-                title = stringResource(R.string.settings_agents_custom_codex_title),
-                message = stringResource(R.string.settings_agents_custom_codex_message),
+                title = stringResource(titleRes),
+                message = stringResource(messageRes),
                 placeholder = "model-id",
                 defaultValue = current,
                 confirmText = stringResource(R.string.common_save),
                 onResult = { value ->
                     val model = value?.trim()
-                    if (!model.isNullOrEmpty()) update(AgentKey.Codex, AgentDefaultField.ModelMode, model)
+                    if (!model.isNullOrEmpty()) update(targetAgent, AgentDefaultField.ModelMode, model)
                 },
             ),
             onDismiss = { customModel = null },

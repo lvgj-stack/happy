@@ -39,7 +39,11 @@ import com.slopus.happy.auth.AuthState
 import com.slopus.happy.model.Machine
 import com.slopus.happy.model.MachineChoice
 import com.slopus.happy.model.Profile
+import com.slopus.happy.model.Session
 import com.slopus.happy.model.collectMachineChoices
+import com.slopus.happy.model.settings.AgentKey
+import com.slopus.happy.model.settings.ModeOption
+import com.slopus.happy.model.settings.ModeOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.slopus.happy.model.settings.ConnectApi
 import com.slopus.happy.model.settings.HttpConnectApi
@@ -141,13 +145,25 @@ private fun Appearance(graph: AppGraph, nav: NavHostController) {
 private fun Agents(graph: AppGraph, nav: NavHostController) {
     val settings by graph.settings.settings.collectAsStateWithLifecycle()
     val machines by rememberMachineChoices(graph)
+    val cursorModels by rememberCursorCatalogModels(graph)
     AgentsScreen(
         machines = machines,
         overrides = settings.agentDefaultOverrides,
         onOverridesChange = { overrides -> graph.settings.change { it.copy(agentDefaultOverrides = overrides) } },
         onMachine = { nav.navigate(MachineRoute(it.id)) },
         onBack = { nav.popBackStack() },
+        cursorModels = cursorModels,
     )
+}
+
+/** Cursor's models from stored Cursor sessions, re-read off the main thread when sessions change. */
+@Composable
+private fun rememberCursorCatalogModels(graph: AppGraph): State<List<ModeOption>> {
+    val versions by graph.store.versions.collectAsStateWithLifecycle()
+    return produceState(ModeOptions.modelModes(AgentKey.Cursor.wire), versions.sessions) {
+        val sessions = withContext(Dispatchers.IO) { graph.store.sessions().map(Session::from) }
+        value = ModeOptions.cursorCatalogModels(sessions)
+    }
 }
 
 /**

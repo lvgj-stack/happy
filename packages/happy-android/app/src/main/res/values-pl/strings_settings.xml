@@ -38,6 +38,8 @@
     <string name="settings_agents_effort">Wysiłek</string>
     <string name="settings_agents_custom_codex_title">Własny model Codex</string>
     <string name="settings_agents_custom_codex_message">Wpisz dokładny identyfikator modelu. Dostępność zależy od twojego konta Codex lub konfiguracji API.</string>
+    <string name="settings_agents_custom_cursor_title">Własny model Cursor</string>
+    <string name="settings_agents_custom_cursor_message">Wpisz dokładny identyfikator modelu. Dostępność zależy od twojego konta Cursor.</string>
     <string name="settings_commit">Commit</string>
     <string name="settings_commit_at">Commit %1$s</string>
     <string name="settings_manage_subscriptions">Zarządzaj subskrypcjami</string>

@@ -38,6 +38,8 @@
     <string name="settings_agents_effort">思考量</string>
     <string name="settings_agents_custom_codex_title">Codex のカスタムモデル</string>
     <string name="settings_agents_custom_codex_message">正確なモデル ID を入力してください。利用できるかどうかは Codex アカウントまたは API の設定によります。</string>
+    <string name="settings_agents_custom_cursor_title">Cursor のカスタムモデル</string>
+    <string name="settings_agents_custom_cursor_message">正確なモデル ID を入力してください。利用できるかどうかは Cursor アカウントによります。</string>
     <string name="settings_commit">コミット</string>
     <string name="settings_commit_at">コミット %1$s</string>
     <string name="settings_manage_subscriptions">サブスクリプションを管理</string>

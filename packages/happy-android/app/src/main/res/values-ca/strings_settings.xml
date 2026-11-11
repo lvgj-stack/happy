@@ -38,6 +38,8 @@
     <string name="settings_agents_effort">Esforç</string>
     <string name="settings_agents_custom_codex_title">Model de Codex personalitzat</string>
     <string name="settings_agents_custom_codex_message">Escriu l\'ID exacte del model. La disponibilitat depèn del teu compte de Codex o de la configuració de l\'API.</string>
+    <string name="settings_agents_custom_cursor_title">Model de Cursor personalitzat</string>
+    <string name="settings_agents_custom_cursor_message">Escriu l\'ID exacte del model. La disponibilitat depèn del teu compte de Cursor.</string>
     <string name="settings_commit">Commit</string>
     <string name="settings_commit_at">Commit %1$s</string>
     <string name="settings_manage_subscriptions">Gestiona les subscripcions</string>

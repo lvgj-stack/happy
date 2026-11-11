@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.slopus.happy.R
 import com.slopus.happy.model.CodeOption
 import com.slopus.happy.model.ModelEntry
+import com.slopus.happy.model.Session
 import com.slopus.happy.model.SessionMetadata
 import com.slopus.happy.model.isRigV1
 import com.slopus.happy.model.rigCurrentModel
@@ -152,18 +153,39 @@ object ModeOptions {
     }
 
     /**
+     * Cursor publishes its account's models on running sessions rather than in
+     * a static list: collect them from the most recently updated Cursor
+     * sessions first, keeping the leading `default` row.
+     */
+    fun cursorCatalogModels(sessions: List<Session>): List<ModeOption> {
+        if (sessions.isEmpty()) return cursorModelModes
+        val seen = LinkedHashMap<String, ModeOption>()
+        for (option in cursorModelModes) seen[option.key] = option
+        for (session in sessions.sortedByDescending { it.updatedAt }) {
+            val metadata = session.metadata ?: continue
+            if (metadata.flavor != "cursor") continue
+            for (entry in metadata.models.orEmpty()) {
+                if (entry.code.isEmpty() || seen.containsKey(entry.code)) continue
+                seen[entry.code] = ModeOption(entry.code, entry.value, entry.description)
+            }
+        }
+        return seen.values.toList()
+    }
+
+    /**
      * includeConfiguredModel: appends the saved model when the list lacks
-     * it, so a pick that left the catalog still shows as itself. Codex, agy
-     * and Claude only; a saved Claude `[1m]` key maps onto its row first.
+     * it, so a pick that left the catalog still shows as itself. Codex,
+     * Cursor, agy and Claude only; a saved Claude `[1m]` key maps onto its
+     * row first.
      */
     fun includeConfiguredModel(flavor: String?, models: List<ModeOption>, configuredModelKey: String?): List<ModeOption> {
         val isClaude = flavor != "rig" && AgentKey.normalize(flavor) == AgentKey.Claude
         val key = AgentDefaults.retireModelMode(flavor, configuredModelKey)
-        if ((flavor != "codex" && flavor != "agy" && !isClaude) || key.isNullOrEmpty() || key == "default" || models.any { it.key == key }) {
+        if ((flavor != "codex" && flavor != "cursor" && flavor != "agy" && !isClaude) || key.isNullOrEmpty() || key == "default" || models.any { it.key == key }) {
             return models
         }
         val name = (if (isClaude) unlistedClaudeModelNames[key] else null) ?: key
-        return models + ModeOption(key, name, if (flavor == "codex") "custom model" else "saved model")
+        return models + ModeOption(key, name, if (flavor == "codex" || flavor == "cursor") "custom model" else "saved model")
     }
 
     /** effortDisplayName: capitalised, but `xhigh` keeps its brand spelling. */
@@ -351,8 +373,8 @@ object ModeOptions {
         }
         val published = metadataModels(metadata?.models)
         if (published.isNotEmpty()) {
-            if (flavor == "codex" && published.none { it.key == AgentDefaults.CODEX_CONFIG_MODEL }) return listOf(codexConfigModel) + published
-            return published
+            val base = if (flavor == "codex" && published.none { it.key == AgentDefaults.CODEX_CONFIG_MODEL }) listOf(codexConfigModel) + published else published
+            return if (flavor == "cursor" || flavor == "codex") includeConfiguredModel(flavor, base, selectedKey) else base
         }
         return includeConfiguredModel(flavor, modelModes(flavor), selectedKey)
     }

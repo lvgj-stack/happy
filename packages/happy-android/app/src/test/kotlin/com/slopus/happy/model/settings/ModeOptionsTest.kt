@@ -1,6 +1,11 @@
 package com.slopus.happy.model.settings
 
 import com.slopus.happy.R
+import com.slopus.happy.model.HomeModelFixtures.metadata
+import com.slopus.happy.model.HomeModelFixtures.session
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -81,7 +86,62 @@ class ModeOptionsTest {
         assertEquals(gemini, ModeOptions.includeConfiguredModel("gemini", gemini, "gemini-1"))
 
         val cursor = ModeOptions.modelModes("cursor")
-        assertEquals(cursor, ModeOptions.includeConfiguredModel("cursor", cursor, "composer-2.5"))
+        assertEquals(
+            listOf("default", "composer-2.5"),
+            ModeOptions.includeConfiguredModel("cursor", cursor, "composer-2.5").map { it.key },
+        )
+        assertEquals(
+            ModeOption("claude-opus-5-5[context=300k,effort=medium,fast=false]", "claude-opus-5-5[context=300k,effort=medium,fast=false]", "custom model"),
+            ModeOptions.includeConfiguredModel("cursor", cursor, "claude-opus-5-5[context=300k,effort=medium,fast=false]").last(),
+        )
+        assertEquals(cursor, ModeOptions.includeConfiguredModel("cursor", cursor, "default"))
+    }
+
+    @Test
+    fun cursorCatalogModelsCollectRecentCursorSessionsInOrder() {
+        val older = session(
+            "s-old",
+            metadata {
+                put("flavor", "cursor")
+                putJsonArray("models") {
+                    addJsonObject { put("code", "composer-2.5"); put("value", "Composer 2.5 Old") }
+                    addJsonObject { put("code", "gpt-5.6-sol-high"); put("value", "GPT-5.6 Sol High") }
+                }
+            },
+            activeAt = 10,
+        ).copy(updatedAt = 10)
+        val newer = session(
+            "s-new",
+            metadata {
+                put("flavor", "cursor")
+                putJsonArray("models") {
+                    addJsonObject { put("code", "auto"); put("value", "Auto") }
+                    addJsonObject { put("code", "composer-2.5"); put("value", "Composer 2.5"); put("description", "Fast") }
+                }
+            },
+            activeAt = 20,
+        ).copy(updatedAt = 20)
+        val otherFlavor = session(
+            "s-opencode",
+            metadata {
+                put("flavor", "opencode")
+                putJsonArray("models") {
+                    addJsonObject { put("code", "ignored"); put("value", "Ignored") }
+                }
+            },
+            activeAt = 30,
+        ).copy(updatedAt = 30)
+        val catalog = ModeOptions.cursorCatalogModels(listOf(older, newer, otherFlavor))
+        assertEquals(
+            listOf(
+                ModeOption("default", "Default model"),
+                ModeOption("auto", "Auto"),
+                ModeOption("composer-2.5", "Composer 2.5", "Fast"),
+                ModeOption("gpt-5.6-sol-high", "GPT-5.6 Sol High"),
+            ),
+            catalog,
+        )
+        assertEquals(listOf(ModeOption("default", "Default model")), ModeOptions.cursorCatalogModels(emptyList()))
     }
 
     @Test

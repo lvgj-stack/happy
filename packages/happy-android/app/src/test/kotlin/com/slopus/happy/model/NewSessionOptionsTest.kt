@@ -176,4 +176,46 @@ class NewSessionOptionsTest {
         assertEquals(false, modeSupportedByCli(auto, "1.0.0"))
         assertEquals(false, modeSupportedByCli(auto, "garbage"))
     }
+
+    @Test fun cursorNewSessionOffersRecentSessionModelsAndConfiguredDefault() {
+        val cursorMachine = machine(
+            "m-cur",
+            machineMetadata { put("displayName", "Studio"); cliAvailability(claude = true, cursor = true) },
+            activeAt = 5,
+        )
+        val cursorSession = session(
+            "s-cur",
+            metadata {
+                put("machineId", "m-cur")
+                put("flavor", "cursor")
+                putJsonArray("models") {
+                    addJsonObject { put("code", "composer-2.5"); put("value", "Composer 2.5") }
+                    addJsonObject { put("code", "gpt-5.6-sol-high"); put("value", "GPT-5.6 Sol High") }
+                }
+            },
+        ).copy(updatedAt = 10)
+        val customOverrides = AgentDefaultOverrides(
+            mapOf(com.slopus.happy.model.settings.AgentKey.Cursor to com.slopus.happy.model.settings.AgentDefaultOverride(modelMode = "claude-opus-5-5[context=300k,effort=medium,fast=false]")),
+        )
+        val withSessions = resolveNewSessionOptions(
+            NewSessionDraft(selectedMachineId = "m-cur", agentType = AgentType.Cursor),
+            listOf(cursorMachine),
+            listOf(cursorSession),
+            customOverrides,
+        )
+        assertEquals(
+            listOf("default", "composer-2.5", "gpt-5.6-sol-high", "claude-opus-5-5[context=300k,effort=medium,fast=false]"),
+            withSessions.models.single().options.map { it.key },
+        )
+        assertEquals("claude-opus-5-5[context=300k,effort=medium,fast=false]", withSessions.model?.key)
+
+        val pickedKnown = resolveNewSessionOptions(
+            NewSessionDraft(selectedMachineId = "m-cur", agentType = AgentType.Cursor),
+            listOf(cursorMachine),
+            listOf(cursorSession),
+            AgentDefaultOverrides(mapOf(com.slopus.happy.model.settings.AgentKey.Cursor to com.slopus.happy.model.settings.AgentDefaultOverride(modelMode = "composer-2.5"))),
+        )
+        assertEquals("Composer 2.5", pickedKnown.model?.name)
+        assertEquals("Composer 2.5", pickedKnown.modelChip)
+    }
 }

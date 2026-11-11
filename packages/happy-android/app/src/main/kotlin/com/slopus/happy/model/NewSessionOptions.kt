@@ -336,7 +336,9 @@ fun resolveNewSessionOptions(
             PickerSection(providerId, group.first().providerName, group.map { PickerOption(it.key, it.name) })
         }
     } else {
-        val models = ModeOptions.includeConfiguredModel(agentType.wire, ModeOptions.modelModes(agentType.wire), defaults.modelMode)
+        val baseModels = if (agentType == AgentType.Cursor) ModeOptions.cursorCatalogModels(sessions) else ModeOptions.modelModes(agentType.wire)
+        val pick = AgentDefaults.retireModelMode(agentType.wire, draft.modelMode) ?: defaults.modelMode
+        val models = ModeOptions.includeConfiguredModel(agentType.wire, ModeOptions.includeConfiguredModel(agentType.wire, baseModels, defaults.modelMode), pick)
         listOf(PickerSection("__models__", null, models.map { it.toPicker() }))
     }
     val modelOptions = modelSections.flatMap { it.options }

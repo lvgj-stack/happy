@@ -18,11 +18,15 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.slopus.happy.model.HomeModelFixtures.machine
 import com.slopus.happy.model.HomeModelFixtures.machineMetadata
+import com.slopus.happy.model.HomeModelFixtures.metadata
+import com.slopus.happy.model.HomeModelFixtures.session
 import com.slopus.happy.model.MachineChoice
 import com.slopus.happy.model.collectMachineChoices
 import com.slopus.happy.model.settings.AgentDefaultOverride
 import com.slopus.happy.model.settings.AgentDefaultOverrides
 import com.slopus.happy.model.settings.AgentKey
+import com.slopus.happy.model.settings.ModeOption
+import com.slopus.happy.model.settings.ModeOptions
 import com.slopus.happy.ui.PHONE
 import com.slopus.happy.ui.assertDp
 import com.slopus.happy.ui.bounds
@@ -36,7 +40,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
 /**
  * happy-app settings/agents.tsx. Machines: one row per computer, online
@@ -87,6 +93,7 @@ class AgentsLayoutTest {
         rule.onAllNodesWithText("Default (Auto)").assertCountEquals(2)
         rule.onNodeWithText("Default (Opus 5)").assertIsDisplayed()
         rule.onNodeWithText("Default (GPT-6.1 Sol)").assertIsDisplayed()
+        rule.onNodeWithText("Default (Default model)").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -159,5 +166,40 @@ class AgentsLayoutTest {
         rule.onAllNodesWithText("Default (Medium)")[1].performScrollTo().performClick()
         rule.onAllNodesWithText("xHigh").assertCountEquals(1)
         rule.onAllNodesWithText("Ultra").assertCountEquals(0)
+    }
+
+    @Test
+    fun cursorListsRecentSessionModelsAndTakesACustomModel() {
+        val cursorSession = session(
+            "s-cur",
+            metadata {
+                put("flavor", "cursor")
+                putJsonArray("models") {
+                    addJsonObject { put("code", "composer-2.5"); put("value", "Composer 2.5") }
+                    addJsonObject { put("code", "gpt-5.6-sol-high"); put("value", "GPT-5.6 Sol High") }
+                }
+            },
+        ).copy(updatedAt = 10)
+        val cursorModels: List<ModeOption> = ModeOptions.cursorCatalogModels(listOf(cursorSession))
+        var overrides by mutableStateOf(AgentDefaultOverrides())
+        rule.setHappyContent { AgentsScreen(emptyList(), overrides, { overrides = it }, {}, {}, cursorModels = cursorModels) }
+
+        // Cursor's Model row is the 4th Model row (Claude, Codex, Antigravity, Cursor).
+        rule.onAllNodesWithText("Model")[3].performScrollTo().performClick()
+        rule.onNodeWithText("Composer 2.5").performScrollTo().performClick()
+        assertEquals("composer-2.5", overrides.agents[AgentKey.Cursor]?.modelMode)
+        rule.onAllNodesWithText("Composer 2.5")[0].assertIsDisplayed()
+
+        // Custom model prompt works for Cursor too, including bracketed parameterized IDs.
+        rule.onNodeWithText("Custom model…").performScrollTo().performClick()
+        rule.onNodeWithText("Custom Cursor model").assertIsDisplayed()
+        rule.onNodeWithTag(PromptTags.INPUT).performTextInput("  claude-opus-5-5[context=300k,effort=medium,fast=false] ")
+        rule.onNodeWithTag(PromptTags.CONFIRM).performClick()
+        assertEquals("claude-opus-5-5[context=300k,effort=medium,fast=false]", overrides.agents[AgentKey.Cursor]?.modelMode)
+        rule.onNodeWithText("custom model").performScrollTo().assertIsDisplayed()
+
+        // Returning to code default clears the Cursor model override.
+        rule.onNodeWithText("Use code default").performScrollTo().performClick()
+        assertEquals(AgentDefaultOverrides(), overrides)
     }
 }
