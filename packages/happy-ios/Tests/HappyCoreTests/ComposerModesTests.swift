@@ -182,9 +182,9 @@ final class ModelModeOptionsTests: XCTestCase {
     func testOnlyCurrentGenerationClaudeModels() {
         let models = Options.hardcodedModelModes(flavor: "claude")
         XCTAssertEqual(keys(models), [
-            "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+            "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5",
         ])
-        XCTAssertEqual(models.map(\.name), ["Fable 5.1", "Fable 5", "Opus 5.5", "Opus 5", "Sonnet 5.5", "Haiku 5.5"])
+        XCTAssertEqual(models.map(\.name), ["Fable 5.2", "Fable 5.1", "Fable 5", "Opus 5.5", "Opus 5", "Sonnet 5.5", "Haiku 5.5"])
         XCTAssertFalse(models.contains { $0.key == "default" })
         XCTAssertFalse(models.contains { ["opus", "sonnet", "fable", "haiku"].contains($0.key) })
         XCTAssertFalse(models.contains { $0.key.hasSuffix("[1m]") })
@@ -238,7 +238,7 @@ final class ModelModeOptionsTests: XCTestCase {
     }
 
     func testClaudeGetsTheSDKScaleForEveryModel() {
-        for model in ["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
+        for model in ["claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
             let levels = Options.effortLevelsForModel(flavor: "claude", modelKey: model)
             XCTAssertEqual(keys(levels), ["low", "medium", "high", "xhigh", "max"])
             XCTAssertEqual(levels.map(\.name), ["Low", "Medium", "High", "xHigh", "Max"])

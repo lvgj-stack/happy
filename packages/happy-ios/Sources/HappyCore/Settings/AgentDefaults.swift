@@ -209,7 +209,8 @@ public enum AgentDefaults {
         switch agent {
         case .claude:
             [
-                Option("claude-fable-5-1", "Fable 5.1", "1M context"),
+                Option("claude-fable-5-2", "Fable 5.2", "1M context"),
+                Option("claude-fable-5-1", "Fable 5.1"),
                 Option("claude-fable-5", "Fable 5"),
                 Option("claude-opus-5-5", "Opus 5.5"),
                 Option("claude-opus-5", "Opus 5"),
