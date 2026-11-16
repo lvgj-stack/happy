@@ -81,10 +81,14 @@ class NewSessionOptionsTest {
         val options = resolve(draft, listOf(cursorMachine), sessions)
         assertTrue(options.agents.any { it.key == "cursor" })
         assertEquals(AgentType.Cursor, options.resolvedAgent)
-        assertEquals(listOf("cursor-model[effort=high]"), options.models.flatMap { it.options }.map { it.key })
-        assertEquals("cursor-model[effort=high]", options.model?.key)
-        assertEquals(listOf("high", "ultra"), options.efforts.map { it.key })
-        assertEquals("ultra", options.effort?.key)
+        // Cursor keeps its leading default row; only this computer's newest catalog follows it.
+        assertEquals(listOf("default", "cursor-model[effort=high]"), options.models.flatMap { it.options }.map { it.key })
+        assertEquals("default", options.model?.key)
+        // A picked catalog model offers its CLI's effort scale and default.
+        val picked = resolve(draft.copy(modelMode = "cursor-model[effort=high]"), listOf(cursorMachine), sessions)
+        assertEquals("cursor-model[effort=high]", picked.model?.key)
+        assertEquals(listOf("high", "ultra"), picked.efforts.map { it.key })
+        assertEquals("ultra", picked.effort?.key)
         // Before any Cursor catalog arrives, a saved CLI model still survives.
         assertEquals("saved-cursor-model", resolve(draft.copy(modelMode = "saved-cursor-model"), listOf(cursorMachine)).model?.key)
     }

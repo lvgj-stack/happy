@@ -247,7 +247,7 @@ class SessionStarterTest {
             put("models", kotlinx.serialization.json.Json.parseToJsonElement("""[{"code":"cursor-model[variant=fast]","value":"Cursor model","thinkingLevels":["high","ultra"],"defaultThinkingLevel":"ultra"}]"""))
         })
         val h = harness(machines = listOf(cursor),
-            draft = NewSessionDraft(input = "hello", selectedMachineId = cursor.id, agentType = AgentType.Cursor, pickedAgentType = AgentType.Cursor),
+            draft = NewSessionDraft(input = "hello", selectedMachineId = cursor.id, agentType = AgentType.Cursor, pickedAgentType = AgentType.Cursor, modelMode = "cursor-model[variant=fast]"),
             catalogSessions = listOf(catalog))
         assertEquals(StartResult.Started("s1"), h.starter.start(confirmDirectory = yes))
         val request = h.machines.spawns.single()

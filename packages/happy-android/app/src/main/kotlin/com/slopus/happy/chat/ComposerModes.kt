@@ -51,8 +51,9 @@ object ComposerModeResolver {
     /**
      * useComposerModes: each chip's value is the session's own pick
      * ([mirror]) when the list has it, then, for a Happy Agent session,
-     * what the agent reports. Codex and Cursor also follow the CLI's current
-     * model before local defaults. A pick on a retired Claude row shows the
+     * what the agent reports. Codex follows the CLI's current model before
+     * local defaults; any other agent, Cursor included, puts the user's agent
+     * default before what the agent reports. A pick on a retired Claude row shows the
      * row that runs the same model.
      */
     fun resolve(
@@ -79,7 +80,7 @@ object ComposerModeResolver {
         val rigModelKey = metadata.rigSelectedModel()?.let { (provider, id) -> qualifyRigModelKey(provider, id) }
         val model = ModeOptions.resolveCurrentOption(models, when {
             rig -> listOf(sessionModel, rigModelKey)
-            flavor == "codex" || flavor == "cursor" -> listOf(sessionModel, metadata?.currentModelCode, defaults.modelMode)
+            flavor == "codex" -> listOf(sessionModel, metadata?.currentModelCode, defaults.modelMode)
             else -> listOf(sessionModel, defaults.modelMode, metadata?.currentModelCode)
         })
         val modelKey = model?.key ?: "default"
