@@ -171,6 +171,7 @@ class SessionStarterTest {
     private fun TestScope.harness(
         machines: List<Machine> = listOf(cli),
         draft: NewSessionDraft,
+        catalogSessions: List<com.slopus.happy.model.Session> = emptyList(),
         send: suspend (NewSessionDraftStore) -> Boolean = { true },
     ): Harness {
         val prefs = context.getSharedPreferences(NewSessionDraftStore.PREFS_NAME, Context.MODE_PRIVATE)
@@ -182,7 +183,7 @@ class SessionStarterTest {
         val sender = FakeSender { send(drafts) }
         val starter = SessionStarter(
             machines = { machines },
-            sessions = { emptyList() },
+            sessions = { catalogSessions },
             settings = { Settings() },
             drafts = drafts,
             machineActions = fakeMachines,
@@ -235,6 +236,26 @@ class SessionStarterTest {
         assertEquals("s1", pinnedId)
         assertEquals(request.permissionMode, modes[AgentModeField.PERMISSION_MODE])
         assertTrue(modes.containsKey(AgentModeField.MODEL_MODE))
+    }
+
+    @Test fun cursorLaunchPinsTheModelAndEffortOfferedByItsCli() = runTest {
+        val cursor = cli.copy(metadata = machineMetadata {
+            put("cliAvailability", kotlinx.serialization.json.Json.parseToJsonElement("""{"claude":true,"codex":true,"gemini":false,"openclaw":false,"cursor":true,"detectedAt":1}"""))
+        })
+        val catalog = com.slopus.happy.model.HomeModelFixtures.session("catalog", com.slopus.happy.model.HomeModelFixtures.metadata {
+            put("flavor", "cursor"); put("machineId", cursor.id)
+            put("models", kotlinx.serialization.json.Json.parseToJsonElement("""[{"code":"cursor-model[variant=fast]","value":"Cursor model","thinkingLevels":["high","ultra"],"defaultThinkingLevel":"ultra"}]"""))
+        })
+        val h = harness(machines = listOf(cursor),
+            draft = NewSessionDraft(input = "hello", selectedMachineId = cursor.id, agentType = AgentType.Cursor, pickedAgentType = AgentType.Cursor),
+            catalogSessions = listOf(catalog))
+        assertEquals(StartResult.Started("s1"), h.starter.start(confirmDirectory = yes))
+        val request = h.machines.spawns.single()
+        assertEquals("cursor", request.agent)
+        assertEquals("cursor-model[variant=fast]", request.modelMode)
+        assertEquals("ultra", request.effortLevel)
+        assertEquals("cursor-model[variant=fast]", h.sender.pinned.single().second[AgentModeField.MODEL_MODE])
+        assertEquals("ultra", h.sender.pinned.single().second[AgentModeField.EFFORT_LEVEL])
     }
 
     @Test fun aRefusedFirstMessageKeepsTheSessionForTheNextSend() = runTest {

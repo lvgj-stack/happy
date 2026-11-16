@@ -25,6 +25,18 @@ class SuggestionsTest {
     }
 
     @Test
+    fun codexAndCursorOfferTheLocalModelPickerCommandOnce() {
+        for (flavor in listOf("codex", "cursor")) {
+            val metadata = SessionMetadata.parse("""{"path":"/repo","host":"mac","flavor":"$flavor","slashCommands":["model"]}""")
+            assertEquals(1, sessionCommands(metadata).count { it.command == "model" })
+            assertEquals("model", searchCommands(metadata, "model").first().command)
+            assertTrue(isModelPickerCommand(" /model \n", metadata))
+            assertEquals(false, isModelPickerCommand("/model something", metadata))
+        }
+        assertEquals(false, isModelPickerCommand("/model", metadata))
+    }
+
+    @Test
     fun aBlankCommandQueryListsEverythingUpToTheLimit() {
         assertEquals(8, searchCommands(metadata, "").size)
         assertEquals(listOf("compact", "clear"), searchCommands(metadata, " ", limit = 2).map { it.command })

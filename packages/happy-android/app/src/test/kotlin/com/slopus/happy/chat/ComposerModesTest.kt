@@ -142,6 +142,46 @@ class ComposerModesTest {
     }
 
     @Test
+    fun codexPickerFollowsTheCliModelAndItsEffortScale() {
+        val metadata = plain("codex") {
+            put("models", Json.parseToJsonElement("""[
+                {"code":"gpt-6.1-sol","value":"Sol","thinkingLevels":["low","medium"],"defaultThinkingLevel":"low"},
+                {"code":"account-model","value":"Account model","thinkingLevels":["high","ultra"],"defaultThinkingLevel":"ultra"},
+                {"code":"no-reasoning","value":"Fast","thinkingLevels":[]}
+            ]"""))
+            put("currentModelCode", "account-model")
+            put("currentThoughtLevelCode", "high")
+        }
+        val reported = ComposerModeResolver.resolve(metadata, ComposerMirror(), null, translate)
+        assertEquals("account-model", reported.modelMode?.key)
+        assertEquals(listOf("high", "ultra"), reported.availableEffortLevels.map { it.key })
+        assertEquals("high", reported.effortLevel?.key)
+        val picked = ComposerModeResolver.resolve(metadata, ComposerMirror(modelMode = "gpt-6.1-sol"), null, translate)
+        assertEquals("gpt-6.1-sol", picked.modelMode?.key)
+        assertEquals("low", picked.effortLevel?.key)
+        val fast = ComposerModeResolver.resolve(metadata, ComposerMirror(modelMode = "no-reasoning", effortLevel = "ultra"), null, translate)
+        assertTrue(fast.availableEffortLevels.isEmpty())
+        assertNull(fast.effortLevel)
+        assertEquals(mapOf(AgentModeField.MODEL_MODE to "gpt-6.1-sol", AgentModeField.EFFORT_LEVEL to "low"),
+            ComposerModeResolver.patch(AgentModeField.MODEL_MODE, picked.modelMode!!, metadata, ComposerMirror(effortLevel = "ultra")))
+    }
+
+    @Test
+    fun cursorUsesAcpThoughtLevelsOnlyForTheCurrentModel() {
+        val metadata = plain("cursor") {
+            put("models", Json.parseToJsonElement("""[{"code":"current[effort=high]","value":"Current"},{"code":"other","value":"Other"}]"""))
+            put("currentModelCode", "current[effort=high]")
+            put("thoughtLevels", Json.parseToJsonElement("""[{"code":"high","value":"Deep"},{"code":"low","value":"Quick"}]"""))
+            put("currentThoughtLevelCode", "high")
+        }
+        val current = ComposerModeResolver.resolve(metadata, ComposerMirror(), null, translate)
+        assertEquals("current[effort=high]", current.modelMode?.key)
+        assertEquals(listOf("Deep", "Quick"), current.availableEffortLevels.map { it.name })
+        assertEquals("high", current.effortLevel?.key)
+        assertTrue(ComposerModeResolver.resolve(metadata, ComposerMirror(modelMode = "other"), null, translate).availableEffortLevels.isEmpty())
+    }
+
+    @Test
     fun codexConfigShowsNoEffortUnlessOnePicked() {
         val followed = ComposerModeResolver.resolve(plain("codex"), ComposerMirror(modelMode = "default"), null, translate)
         assertEquals("default", followed.modelMode?.key)

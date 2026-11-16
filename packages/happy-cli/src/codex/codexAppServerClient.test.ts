@@ -128,6 +128,48 @@ describe('CodexAppServerClient sandbox integration', () => {
         process.env.RUST_LOG = originalRustLog;
     });
 
+    it('reads all /model pages and excludes hidden entries', async () => {
+        const requests: MockRpcMessage[] = [];
+        const model = (id: string, hidden = false) => ({
+            id, model: id, displayName: id, description: '', hidden, isDefault: false,
+            defaultReasoningEffort: 'high',
+            supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'Deep reasoning' }],
+        });
+        mockSpawn.mockImplementation(() => createMockProcess({ onRequest: (msg, stdout) => {
+            if (msg.method !== 'model/list') return;
+            requests.push(msg);
+            pushJsonLine(stdout, { id: msg.id, result: msg.params.cursor
+                ? { data: [model('second')], nextCursor: null }
+                : { data: [model('first'), model('hidden', true)], nextCursor: 'page-2' } });
+        } }));
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        try {
+            expect(await client.listModels()).toEqual([model('first'), model('second')]);
+            expect(requests.map((msg) => msg.params)).toEqual([
+                { cursor: null, limit: 100, includeHidden: false },
+                { cursor: 'page-2', limit: 100, includeHidden: false },
+            ]);
+        } finally {
+            await client.disconnect();
+        }
+    });
+
+    it('rejects a repeated model page cursor instead of looping', async () => {
+        mockSpawn.mockImplementation(() => createMockProcess({ onRequest: (msg, stdout) => {
+            if (msg.method === 'model/list') pushJsonLine(stdout, { id: msg.id, result: { data: [], nextCursor: 'same' } });
+        } }));
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        try {
+            await expect(client.listModels()).rejects.toThrow('repeated a page cursor');
+        } finally {
+            await client.disconnect();
+        }
+    });
+
     it('reports goal action support for Codex versions with goal action requests', async () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
 

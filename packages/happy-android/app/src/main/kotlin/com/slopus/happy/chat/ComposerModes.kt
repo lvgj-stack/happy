@@ -51,8 +51,8 @@ object ComposerModeResolver {
     /**
      * useComposerModes: each chip's value is the session's own pick
      * ([mirror]) when the list has it, then, for a Happy Agent session,
-     * what the agent reports; for any other, the user's agent default and
-     * then what the agent reports. A pick on a retired Claude row shows the
+     * what the agent reports. Codex and Cursor also follow the CLI's current
+     * model before local defaults. A pick on a retired Claude row shows the
      * row that runs the same model.
      */
     fun resolve(
@@ -77,15 +77,22 @@ object ComposerModeResolver {
             },
         )
         val rigModelKey = metadata.rigSelectedModel()?.let { (provider, id) -> qualifyRigModelKey(provider, id) }
-        val model = ModeOptions.resolveCurrentOption(
-            models,
-            listOf(sessionModel, if (rig) rigModelKey else defaults.modelMode, if (rig) null else metadata?.currentModelCode),
-        )
+        val model = ModeOptions.resolveCurrentOption(models, when {
+            rig -> listOf(sessionModel, rigModelKey)
+            flavor == "codex" || flavor == "cursor" -> listOf(sessionModel, metadata?.currentModelCode, defaults.modelMode)
+            else -> listOf(sessionModel, defaults.modelMode, metadata?.currentModelCode)
+        })
         val modelKey = model?.key ?: "default"
         val efforts = ModeOptions.effortLevelsForModel(flavor, modelKey, metadata)
         val effort = ModeOptions.resolveCurrentOption(
             efforts,
-            listOf(mirror.effortLevel, if (rig) rigReasoningSelection(metadata, modelKey, efforts) else defaults.effortLevel),
+            if (rig) listOf(mirror.effortLevel, rigReasoningSelection(metadata, modelKey, efforts))
+            else listOf(
+                mirror.effortLevel,
+                metadata?.currentThoughtLevelCode.takeIf { modelKey == metadata?.currentModelCode && modelKey != "default" },
+                model?.defaultThinkingLevel.takeIf { modelKey != "default" },
+                defaults.effortLevel,
+            ),
         )
         return ComposerModes(
             availableModes = modes,

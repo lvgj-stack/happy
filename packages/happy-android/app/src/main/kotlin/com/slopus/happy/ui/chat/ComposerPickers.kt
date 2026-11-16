@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -126,12 +127,17 @@ fun ComposerModeChips(
     metadata: SessionMetadata?,
     onSelect: (AgentModeField, ModeOption) -> Unit,
     modifier: Modifier = Modifier,
+    /** A submitted /model opens the same popup as the chip. Zero means no request. */
+    modelRequest: Int = 0,
 ) {
     val colors = HappyTheme.colors
     val haptics = LocalHapticFeedback.current
     var open by rememberSaveable { mutableStateOf<ComposerPicker?>(null) }
     var anchorCenterY by remember { mutableIntStateOf(0) }
     val canOpenModel = modes.canChangeModel && modes.availableModels.isNotEmpty()
+    LaunchedEffect(modelRequest) {
+        if (modelRequest > 0 && canOpenModel) open = ComposerPicker.Model
+    }
     val showEffort = modes.canChangeEffort && modes.availableEffortLevels.isNotEmpty()
     fun toggle(picker: ComposerPicker) {
         haptics.light()

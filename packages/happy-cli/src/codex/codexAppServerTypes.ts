@@ -14,6 +14,21 @@ export type InitializeParams = {
 
 export type InitializeResponse = { userAgent: string };
 
+// --- Model catalog (`model/list`, the same catalog as the CLI's /model) ---
+
+export type CodexModel = {
+    id: string;
+    model: string;
+    displayName: string;
+    description: string;
+    hidden?: boolean;
+    isDefault: boolean;
+    defaultReasoningEffort: ReasoningEffort;
+    supportedReasoningEfforts: Array<{ reasoningEffort: ReasoningEffort; description: string }>;
+};
+
+export type ModelListResponse = { data: CodexModel[]; nextCursor: string | null };
+
 // --- Thread lifecycle ---
 
 export type NewConversationParams = {

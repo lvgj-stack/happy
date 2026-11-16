@@ -63,6 +63,39 @@ class NewSessionOptionsTest {
     private fun resolve(draft: NewSessionDraft, machines: List<Machine> = listOf(laptop, studio), sessions: List<Session> = emptyList(), worktrees: WorktreeListing? = null) =
         resolveNewSessionOptions(draft, machines, sessions, overrides, worktrees, NewSessionLabels(lastSeen = { "seen $it" }))
 
+    @Test fun cursorIsSelectableAndNewChatsReuseOnlyTheirComputersLatestCliCatalog() {
+        val cursorMachine = machine("cursor-machine", machineMetadata {
+            put("cliAvailability", kotlinx.serialization.json.Json.parseToJsonElement("""{"claude":true,"codex":true,"gemini":false,"openclaw":false,"cursor":true,"detectedAt":1}"""))
+        })
+        fun catalog(id: String, computer: String, model: String, updated: Long, flavor: String = "cursor") = session(id, metadata {
+            put("machineId", computer); put("flavor", flavor)
+            put("models", kotlinx.serialization.json.Json.parseToJsonElement("""[{"code":"$model","value":"$model","thinkingLevels":["high","ultra"],"defaultThinkingLevel":"ultra"}]"""))
+        }).copy(updatedAt = updated)
+        val sessions = listOf(
+            catalog("old", "cursor-machine", "old-model", 1),
+            catalog("current", "cursor-machine", "cursor-model[effort=high]", 2),
+            catalog("other", "other-machine", "other-model", 100),
+            catalog("codex", "cursor-machine", "codex-model", 200, "codex"),
+        )
+        val draft = NewSessionDraft(selectedMachineId = cursorMachine.id, agentType = AgentType.Cursor, pickedAgentType = AgentType.Cursor)
+        val options = resolve(draft, listOf(cursorMachine), sessions)
+        assertTrue(options.agents.any { it.key == "cursor" })
+        assertEquals(AgentType.Cursor, options.resolvedAgent)
+        assertEquals(listOf("cursor-model[effort=high]"), options.models.flatMap { it.options }.map { it.key })
+        assertEquals("cursor-model[effort=high]", options.model?.key)
+        assertEquals(listOf("high", "ultra"), options.efforts.map { it.key })
+        assertEquals("ultra", options.effort?.key)
+        // Before any Cursor catalog arrives, a saved CLI model still survives.
+        assertEquals("saved-cursor-model", resolve(draft.copy(modelMode = "saved-cursor-model"), listOf(cursorMachine)).model?.key)
+    }
+
+    @Test fun codexConfigLeavesEffortToTheCliUnlessPicked() {
+        val draft = NewSessionDraft(selectedMachineId = studio.id, agentType = AgentType.Codex, pickedAgentType = AgentType.Codex, modelMode = "default")
+        assertEquals("default", resolve(draft).model?.key)
+        assertNull(resolve(draft).effort)
+        assertEquals("high", resolve(draft.copy(effortLevel = "high")).effort?.key)
+    }
+
     @Test fun computersOnlineFirstAndAStaleMachineBecomesTheFirst() {
         val options = resolve(NewSessionDraft(selectedMachineId = "gone"))
         assertEquals(listOf("m1", "m2"), options.machines.map { it.key })

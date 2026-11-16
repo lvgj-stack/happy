@@ -227,6 +227,12 @@ object ModeOptions {
      */
     fun effortLevelsForModel(flavor: String?, modelKey: String?, metadata: SessionMetadata?): List<ModeOption> {
         if (metadata.isRigV1()) return rigReasoningLevels(metadata, modelKey).map { ModeOption(it, effortDisplayName(it)) }
+        if (flavor == "codex" || flavor == "cursor") {
+            metadata?.models?.find { it.code == modelKey }?.thinkingLevels?.let { return effortLevels(it) }
+            if (modelKey == metadata?.currentModelCode) {
+                metadata?.thoughtLevels?.let { return metadataOptions(it) }
+            }
+        }
         return effortLevelsForModel(flavor, modelKey)
     }
 
@@ -243,7 +249,7 @@ object ModeOptions {
         options.orEmpty().map { ModeOption(it.code, it.value, it.description) }
 
     private fun metadataModels(models: List<ModelEntry>?): List<ModeOption> =
-        models.orEmpty().map { ModeOption(it.code, it.value, it.description) }
+        models.orEmpty().map { ModeOption(it.code, it.value, it.description, defaultThinkingLevel = it.defaultThinkingLevel) }
 
     /** filterPermissionModesForCli: the hardcoded lists only; a published catalog matches its own CLI. */
     fun filterPermissionModesForCli(modes: List<ModeOption>, cliVersion: String?): List<ModeOption> =

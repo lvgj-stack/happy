@@ -5,6 +5,12 @@ import com.slopus.happy.model.SessionMetadata
 /** suggestionCommands.ts `CommandItem`: a command without its slash. */
 data class CommandItem(val command: String, val description: String? = null)
 
+/** These harnesses expose their /model catalog through Happy's model picker. */
+fun hasModelPickerCommand(metadata: SessionMetadata?): Boolean = metadata?.flavor == "codex" || metadata?.flavor == "cursor"
+
+fun isModelPickerCommand(text: String, metadata: SessionMetadata?): Boolean =
+    hasModelPickerCommand(metadata) && text.trim() == "/model"
+
 /** suggestionCommands.ts `IGNORED_COMMANDS`: CLI-only commands that make no sense from the phone. */
 val IGNORED_COMMANDS = setOf(
     "add-dir", "agents", "config", "statusline", "bashes", "settings", "cost", "doctor", "exit", "help", "ide",
@@ -40,6 +46,7 @@ private val COMMAND_DESCRIPTIONS = mapOf(
 fun sessionCommands(metadata: SessionMetadata?): List<CommandItem> {
     if (metadata == null) return DEFAULT_COMMANDS
     val commands = DEFAULT_COMMANDS.toMutableList()
+    if (hasModelPickerCommand(metadata)) commands += CommandItem("model", "Select a model")
     for (command in metadata.slashCommands.orEmpty() + metadata.skills.orEmpty()) {
         if (command in IGNORED_COMMANDS || commands.any { it.command == command }) continue
         commands += CommandItem(command, COMMAND_DESCRIPTIONS[command])

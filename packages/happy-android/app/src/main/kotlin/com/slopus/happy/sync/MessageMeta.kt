@@ -85,11 +85,12 @@ object MessageMetaResolver {
         // picked as effort: null, so Codex runs what its config.toml says.
         if (flavor == "codex" || flavor == "agy") {
             val defaults = AgentDefaults.resolve(overrides, flavor, cliVersion, mirror.modelMode)
-            val modelMode = mirror.modelMode ?: defaults.modelMode
+            val modes = if (flavor == "codex") com.slopus.happy.chat.ComposerModeResolver.resolve(metadata, mirror, overrides) { "" } else null
+            val modelMode = modes?.modelMode?.key ?: mirror.modelMode ?: defaults.modelMode
             return MessageModeMeta(
                 permissionMode = supported(AgentDefaults.retirePermissionMode(mirror.permissionMode ?: defaults.permissionMode)),
                 model = Present(modelMode.takeUnless { it == "default" }),
-                effort = Present(mirror.effortLevel ?: defaults.effortLevel),
+                effort = Present(if (modes != null) modes.effortLevel?.key else mirror.effortLevel ?: defaults.effortLevel),
             )
         }
 
@@ -98,8 +99,11 @@ object MessageMetaResolver {
             agentOverrides.permissionMode != null -> supported(agentOverrides.permissionMode)
             else -> null
         }
-        val modelMode = mirror.modelMode ?: agentOverrides.modelMode
-        val effort = mirror.effortLevel ?: agentOverrides.effortLevel
+        val cursorModes = if (flavor == "cursor" && !metadata?.models.isNullOrEmpty()) {
+            com.slopus.happy.chat.ComposerModeResolver.resolve(metadata, mirror, overrides) { "" }
+        } else null
+        val modelMode = cursorModes?.modelMode?.key ?: mirror.modelMode ?: agentOverrides.modelMode
+        val effort = if (cursorModes != null) cursorModes.effortLevel?.key else mirror.effortLevel ?: agentOverrides.effortLevel
         return MessageModeMeta(
             permissionMode = permissionMode,
             model = modelMode?.let { Present(it.takeUnless { mode -> mode == "default" }) },

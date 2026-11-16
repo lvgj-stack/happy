@@ -328,6 +328,17 @@ fun resolveNewSessionOptions(
     val targets = choices.sortedByDescending { it.online }.map(MachineTarget::of)
     val cliVersion = happyMachine?.metadata?.happyCliVersion
     val defaults = agentDefaults(agentType, rigCreation, overrides, cliVersion)
+    // Reuse the newest catalog this CLI published on this computer. Another computer's
+    // account can offer different models; its catalog must never leak into this picker.
+    val cliCatalogSession = if (agentType == AgentType.Codex || agentType == AgentType.Cursor) {
+        sessions.asSequence()
+            .filter {
+                happyMachine != null && it.metadata?.machineId == happyMachine.id &&
+                    it.metadata?.flavor == agentType.wire && !it.metadata?.models.isNullOrEmpty()
+            }
+            .maxByOrNull { it.updatedAt }
+    } else null
+    val cliCatalog = cliCatalogSession?.metadata
     // The CLI daemon on the picked computer parses the mode; older ones drop prompts on modes they don't know.
     val permissions = rigCreation?.permissionModes?.map { PickerOption(it.key, it.name, it.description) }
         ?: ModeOptions.permissionModes(agentType.wire, translate).filter { modeSupportedByCli(it, cliVersion) }.map { it.toPicker() }
@@ -336,8 +347,12 @@ fun resolveNewSessionOptions(
             PickerSection(providerId, group.first().providerName, group.map { PickerOption(it.key, it.name) })
         }
     } else {
-        val baseModels = if (agentType == AgentType.Cursor) ModeOptions.cursorCatalogModels(sessions) else ModeOptions.modelModes(agentType.wire)
         val pick = AgentDefaults.retireModelMode(agentType.wire, draft.modelMode) ?: defaults.modelMode
+        val baseModels = if (agentType == AgentType.Cursor) {
+            ModeOptions.cursorCatalogModels(listOfNotNull(cliCatalogSession))
+        } else {
+            ModeOptions.availableModels(agentType.wire, cliCatalog, translate, pick)
+        }
         val models = ModeOptions.includeConfiguredModel(agentType.wire, ModeOptions.includeConfiguredModel(agentType.wire, baseModels, defaults.modelMode), pick)
         listOf(PickerSection("__models__", null, models.map { it.toPicker() }))
     }
@@ -349,9 +364,12 @@ fun resolveNewSessionOptions(
     )
     val model = resolvePickerOption(modelOptions, listOf(AgentDefaults.retireModelMode(agentType.wire, draft.modelMode), defaults.modelMode))
     val efforts = rigCreation?.effortsForModel(model?.key)?.map { PickerOption(it, it) }
-        ?: ModeOptions.effortLevelsForModel(agentType.wire, model?.key ?: "default").map { it.toPicker() }
-    val effortDefault = rigCreation?.defaultEffortForModel(model?.key) ?: defaults.effortLevel
-    val effort = resolvePickerOption(efforts, listOf(draft.effortLevel, effortDefault))
+        ?: ModeOptions.effortLevelsForModel(agentType.wire, model?.key ?: "default", cliCatalog).map { it.toPicker() }
+    val effortDefault = rigCreation?.defaultEffortForModel(model?.key)
+        ?: cliCatalog?.models?.find { it.code == model?.key }?.defaultThinkingLevel ?: defaults.effortLevel
+    val effort = if (AgentDefaults.followsCodexConfig(agentType.wire, model?.key) && draft.effortLevel == null && AgentDefaults.override(overrides, agentType.wire).effortLevel == null) {
+        null
+    } else resolvePickerOption(efforts, listOf(draft.effortLevel, effortDefault))
 
     return NewSessionOptions(
         choice = choice,

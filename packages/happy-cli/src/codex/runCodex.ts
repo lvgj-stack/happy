@@ -828,6 +828,24 @@ export async function runCodex(opts: {
         await client.connect();
         logger.debug('[codex]: client.connect done');
 
+        // Publish the installed CLI's /model choices, including each model's effort scale.
+        // Catalog discovery must not prevent a session from running on an older provider.
+        try {
+            const models = await client.listModels();
+            session.updateMetadata((currentMetadata) => ({
+                ...currentMetadata,
+                models: models.map((model) => ({
+                    code: model.model,
+                    value: model.displayName,
+                    description: model.description,
+                    thinkingLevels: model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort),
+                    defaultThinkingLevel: model.defaultReasoningEffort,
+                })),
+            }));
+        } catch (error) {
+            logger.debug('[codex]: Could not read model catalog:', error);
+        }
+
         if (opts.resumeThreadId) {
             await resumeExistingThread({
                 client,
@@ -963,6 +981,7 @@ export async function runCodex(opts: {
                     session.updateMetadata((currentMetadata) => ({
                         ...currentMetadata,
                         codexThreadId: startedThread.threadId,
+                        currentModelCode: startedThread.model,
                     }));
                 }
 
@@ -1005,6 +1024,11 @@ export async function runCodex(opts: {
                     effort: message.mode.effort,
                     extraInputItems: imageInputs.inputItems,
                 });
+                session.updateMetadata((currentMetadata) => ({
+                    ...currentMetadata,
+                    ...(message.mode.model ? { currentModelCode: message.mode.model } : {}),
+                    currentThoughtLevelCode: message.mode.effort,
+                }));
                 first = false;
                 if (includeAppendSystemPrompt) {
                     appendSystemPromptInjected = true;

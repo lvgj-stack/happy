@@ -196,7 +196,8 @@ android {
 
     buildTypes {
         debug {
-            resValue("string", "app_name", "Happy (dev)")
+            val usesProductionId = providers.gradleProperty("happy.applicationId").orNull == applicationIds.getValue("release")
+            resValue("string", "app_name", if (usesProductionId) "Happy" else "Happy (dev)")
             // -Phappy.debuggable=false: a debug build ART compiles ahead of time, for
             // frame measurements (research/telegram-chat.md). A debuggable app runs
             // interpreted and reads two to three times slower than it ships.

@@ -12,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -141,6 +142,7 @@ private fun ChatComposerFor(
 ) {
     val sessionState = state.sessionState
     val metadata = session.metadata
+    var modelRequest by remember { mutableIntStateOf(0) }
     val latestDraft by rememberUpdatedState(draft)
     val latestSend by rememberUpdatedState(actions.onSend)
     val showAbort = showsAbort(sessionState)
@@ -152,7 +154,8 @@ private fun ChatComposerFor(
     val canAbort = sessionState != SessionState.Disconnected && metadata.rigCanAbort() && !stopRequested
     val blocked = session.isRig && state.thinking && metadata?.capabilities?.steering != true
     val voiceAction = if (state.session != null) rememberVoiceAction(session.id, sessionState != SessionState.Disconnected) else null
-    val primary = resolvePrimaryAction(
+    val modelCommand = !hasComposerImages() && com.slopus.happy.autocomplete.isModelPickerCommand(draft, metadata) && modes.canChangeModel && modes.availableModels.isNotEmpty()
+    val primary = if (modelCommand) PrimaryAction.Send else resolvePrimaryAction(
         hasContent = draft.isNotBlank() || hasComposerImages(),
         showAbort = showAbort,
         canAbort = canAbort,
@@ -209,6 +212,11 @@ private fun ChatComposerFor(
                 }
                 PrimaryAction.Send -> {
                     haptics.light()
+                    if (modelCommand) {
+                        actions.onDraftChange("")
+                        modelRequest++
+                        return@ChatComposer
+                    }
                     stopRequested = false
                     actions.onSend(draft)
                 }
@@ -229,7 +237,7 @@ private fun ChatComposerFor(
                     onSend = { latestSend(latestDraft) },
                     onAttached = { focusAsks++ },
                 )
-                ComposerModeChips(modes, metadata, actions.onModeChange, Modifier.weight(1f))
+                ComposerModeChips(modes, metadata, actions.onModeChange, Modifier.weight(1f), modelRequest = modelRequest)
             }
         },
         top = { ComposerAttachmentStrip() },
@@ -241,7 +249,7 @@ private fun ChatComposerFor(
         panelShake = panelShake,
         primaryShake = primaryShake,
         // A message sent alone flies to its row; pictures come in with theirs (iOS 3c24acf5c).
-        flight = flight?.takeIf { !pictures && !reduceMotion },
+        flight = flight?.takeIf { !pictures && !reduceMotion && !modelCommand },
         bottom = { ComposerUsageRow(state.snapshot.usage, session.agentState?.usageLimits) },
     )
 }

@@ -69,6 +69,25 @@ class ComposerPickerLayoutTest {
 
     // [......... model · effort] [send]: 2 apart, 40 high in the 42 row.
     @Test
+    fun aModelCommandOpensTheSamePickerAndKeepsTheCliModelId() {
+        val cursor = SessionMetadata.parse("""{"path":"/repo","host":"mac","flavor":"cursor",
+            "models":[{"code":"cursor-model[effort=high]","value":"Cursor model"}],"currentModelCode":"cursor-model[effort=high]"}""")!!
+        val picks = mutableListOf<Pair<AgentModeField, String>>()
+        rule.setHappyContent {
+            ChatComposer(text = "", onTextChange = {}, status = null, primary = PrimaryAction.Idle, onPrimary = {},
+                middle = { ComposerModeChips(modes(metadata = cursor), cursor, { field, option -> picks += field to option.key }, modelRequest = 1) })
+        }
+        rule.waitForIdle()
+        rule.node(PickerSheetTags.PANEL).assertExists()
+        val option = rule.node(PickerSheetTags.option("cursor-model[effort=high]"))
+        assertDp("model row at least 56 high", 56, option.bounds.height)
+        option.performClick()
+        rule.waitForIdle()
+        assertEquals(listOf(AgentModeField.MODEL_MODE to "cursor-model[effort=high]"), picks)
+        rule.node(PickerSheetTags.PANEL).assertDoesNotExist()
+    }
+
+    @Test
     fun chipsFillTheActionRowMiddle() {
         showComposer(modes())
         val row = rule.node(ComposerTags.ACTION_ROW).bounds

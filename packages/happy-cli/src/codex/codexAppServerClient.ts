@@ -46,6 +46,8 @@ import type {
     InputItem,
     ReasoningEffort,
     McpServerElicitationRequestResponse,
+    CodexModel,
+    ModelListResponse,
 } from './codexAppServerTypes';
 import type { SandboxConfig } from '@/persistence';
 import { initializeSandbox, wrapForMcpTransport } from '@/sandbox/manager';
@@ -766,6 +768,21 @@ export class CodexAppServerClient {
 
     async disconnect(): Promise<void> {
         await this.disconnectInternal();
+    }
+
+    /** Picker-visible models from the installed Codex and its signed-in provider. */
+    async listModels(): Promise<CodexModel[]> {
+        const models: CodexModel[] = [];
+        const seenCursors = new Set<string>();
+        let cursor: string | null = null;
+        do {
+            const page = await this.request('model/list', { cursor, limit: 100, includeHidden: false }) as ModelListResponse;
+            models.push(...page.data.filter((model) => !model.hidden));
+            cursor = page.nextCursor;
+            if (cursor && seenCursors.has(cursor)) throw new Error('Codex model/list repeated a page cursor');
+            if (cursor) seenCursors.add(cursor);
+        } while (cursor);
+        return models;
     }
 
     private buildThreadConfig(mcpServers?: Record<string, unknown>): Record<string, unknown> | null {

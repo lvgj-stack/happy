@@ -294,8 +294,12 @@ class SessionStarter(
             // The code agents take the user's defaults over the code's.
             val defaults = AgentDefaults.resolve(settings().agentDefaultOverrides, agent.wire, machine.metadata?.happyCliVersion)
             val permission = if (agentChanged) defaults.permissionMode else draft.permissionMode ?: defaults.permissionMode
-            val model = if (agentChanged) defaults.modelMode else AgentDefaults.retireModelMode(agent.wire, draft.modelMode) ?: defaults.modelMode
-            val effort = if (agentChanged) defaults.effortLevel else draft.effortLevel ?: defaults.effortLevel
+            val cliOptions = if (agent == AgentType.Codex || agent == AgentType.Cursor) {
+                val resolvedDraft = if (agentChanged) draft.copy(agentType = agent, modelMode = defaults.modelMode, effortLevel = defaults.effortLevel) else draft
+                com.slopus.happy.model.resolveNewSessionOptions(resolvedDraft, machines, sessions, settings().agentDefaultOverrides)
+            } else null
+            val model = cliOptions?.model?.key ?: if (agentChanged) defaults.modelMode else AgentDefaults.retireModelMode(agent.wire, draft.modelMode) ?: defaults.modelMode
+            val effort = if (cliOptions != null) cliOptions.effort?.key else if (agentChanged) defaults.effortLevel else draft.effortLevel ?: defaults.effortLevel
             // Pinned as launched: a later change of defaults must not rewrite this session's mode.
             modes = mapOf(
                 AgentModeField.PERMISSION_MODE to permission,

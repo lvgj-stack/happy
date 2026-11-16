@@ -97,6 +97,23 @@ class MessageMetaTest {
     }
 
     @Test
+    fun codexAndCursorSendTheModelAndEffortShownByTheCliCatalog() {
+        for (flavor in listOf("codex", "cursor")) {
+            val metadata = SessionMetadata.parse("""{"path":"/repo","host":"mac","flavor":"$flavor",
+                "models":[{"code":"account-model[variant=fast]","value":"Account model","thinkingLevels":["high","ultra"],"defaultThinkingLevel":"ultra"},
+                {"code":"fast-model","value":"Fast model","thinkingLevels":[]}],
+                "currentModelCode":"account-model[variant=fast]","currentThoughtLevelCode":"high"}""")!!
+            val reported = mode(metadata)
+            assertEquals(Present("account-model[variant=fast]"), reported.model)
+            assertEquals(Present("high"), reported.effort)
+            val fast = mode(metadata, modelMode = "fast-model", effortLevel = "ultra")
+            assertEquals(Present("fast-model"), fast.model)
+            if (flavor == "codex") assertEquals(Present<String>(null), fast.effort)
+            else assertEquals(null, fast.effort)
+        }
+    }
+
+    @Test
     fun theCodexCodeDefaultFollowsTheCliVersion() {
         assertEquals("default", mode(metadata("codex", "1.2.0")).permissionMode)
         assertEquals("auto", mode(metadata("codex", "1.2.1-beta.2")).permissionMode)
