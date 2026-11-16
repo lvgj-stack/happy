@@ -262,9 +262,12 @@ win:
   project's line running on beside them. Every checkout is open by
   default; a tap on the project's or a worktree's row (or TalkBack's
   expand and collapse) folds its chats away after a light tick, a chevron
-  saying which, and the project's row folds only its own checkout. The
-  folded ones are kept on the phone (`LocalSettingsValues.collapsedCheckouts`
-  by `worktreePlaceId`, beside `expandedProjects`' Show all). A folded row
+  saying which. The project's row folds the whole project: its own chats,
+  its worktrees with theirs and the Show all row; a project with only
+  worktrees folds too, and its worktrees' own folds come back as they were
+  when it opens. The folded ones are kept on the phone
+  (`LocalSettingsValues.collapsedCheckouts` by `worktreePlaceId`, the
+  project's with no workspace, beside `expandedProjects`' Show all). A folded row
   speaks for its chats (shimmer, dot) and is the selected row on a tablet
   while one of them is open; an open one shows only its line counts. A
   chat's row opens it, long-presses to its menu and swipes to archive as a

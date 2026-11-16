@@ -36,8 +36,11 @@ data class ProjectHomeEntry(
     val name: String,
     /** Null for a project that only has worktrees. */
     val session: SessionRowData?,
-    /** The project's own checkout ([worktreePlaceId]), which its row folds; null for a project that only has worktrees. */
-    val checkoutId: String? = null,
+    /**
+     * What its row folds by ([worktreePlaceId] with no workspace, the key its own
+     * checkout's fold had): folded, everything under it goes, worktrees too.
+     */
+    val foldId: String,
     val tabs: List<SessionRowData>,
     /** Supplies the avatar: a worktree's chat when there is no own checkout. */
     val avatarSession: SessionRowData?,
@@ -101,8 +104,11 @@ sealed interface ProjectHomeRow {
         override val key get() = "task-${session.id}"
     }
 
-    /** [collapsed]: the project's own chats are folded away under it. */
-    data class ProjectCard(val project: ProjectHomeEntry, val collapsed: Boolean = false) : ProjectHomeRow {
+    /**
+     * [collapsed]: everything under it is folded away, its own chats and its
+     * worktrees with theirs, [sessionIds] all of them, and the card speaks for them.
+     */
+    data class ProjectCard(val project: ProjectHomeEntry, val collapsed: Boolean = false, val sessionIds: Set<String> = emptySet()) : ProjectHomeRow {
         override val key get() = "project-${project.id}"
     }
 
@@ -190,9 +196,10 @@ private fun toWorktree(project: ProjectGroupData, workspace: ProjectWorkspaceGro
 }
 
 /**
- * A project's rows: its card, its own chats while that checkout is open, then
- * its first worktrees (or all of them once [expanded]), each followed by its
- * chats while it is open. A checkout is open unless its id is in [collapsed].
+ * A project's rows: its card, then, unless the card's fold ([ProjectHomeEntry.foldId])
+ * is in [collapsed], its own chats, then its first worktrees (or all of them once
+ * [expanded]), each followed by its chats while it is open. A worktree is open
+ * unless its id is in [collapsed]; a folded card keeps the worktrees' folds as they were.
  */
 private fun projectRows(project: ProjectGroupData, expanded: Set<String>, collapsed: Set<String>): List<ProjectHomeRow> {
     val checkouts = project.workspaces.mapNotNull { toWorktree(project, it) }
@@ -200,8 +207,11 @@ private fun projectRows(project: ProjectGroupData, expanded: Set<String>, collap
     val primary = checkouts.find { it.workspaceId == "" }
     val worktrees = checkouts.filter { it.workspaceId != "" }
     val ownTabs = primary?.tabs.orEmpty()
-    val own = activity(ownTabs)
-    val ownOpen = primary != null && primary.id !in collapsed
+    val foldId = worktreePlaceId(project.id, "")
+    val folded = foldId in collapsed
+    val under = checkouts.flatMap { it.tabs }
+    // Folded, nothing under the card is drawn, so it speaks for all of it.
+    val spoken = activity(if (folded) under else ownTabs)
     val isExpanded = project.id in expanded
     val shown = if (isExpanded) worktrees else worktrees.take(WORKTREE_PREVIEW_COUNT)
     val hidden = worktrees.drop(shown.size)
@@ -212,23 +222,23 @@ private fun projectRows(project: ProjectGroupData, expanded: Set<String>, collap
                 id = project.id,
                 name = project.name,
                 session = primary?.session,
-                checkoutId = primary?.id,
+                foldId = foldId,
                 tabs = ownTabs,
                 avatarSession = primary?.session ?: worktrees.firstOrNull()?.session,
                 worktreeCount = worktrees.size,
-                unread = own.unread,
-                working = own.working,
-                blocked = own.blocked,
+                unread = spoken.unread,
+                working = spoken.working,
+                blocked = spoken.blocked,
                 live = isLive(ownTabs),
             ),
-            collapsed = primary != null && !ownOpen,
+            collapsed = folded,
+            sessionIds = if (folded) under.mapTo(LinkedHashSet()) { it.id } else emptySet(),
         ),
     )
-    if (ownOpen) {
-        val closes = shown.isEmpty() && !togglable
-        ownTabs.forEachIndexed { index, session ->
-            rows.add(ProjectHomeRow.Chat(session, nested = false, last = closes && index == ownTabs.lastIndex))
-        }
+    if (folded) return rows
+    val closes = shown.isEmpty() && !togglable
+    ownTabs.forEachIndexed { index, session ->
+        rows.add(ProjectHomeRow.Chat(session, nested = false, last = closes && index == ownTabs.lastIndex))
     }
     shown.forEachIndexed { index, worktree ->
         val last = !togglable && index == shown.size - 1

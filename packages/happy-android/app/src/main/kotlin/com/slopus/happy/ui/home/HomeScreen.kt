@@ -342,14 +342,14 @@ private fun HomeCardItem(entry: HomeCardEntry, callbacks: HomeListCallbacks, sel
 
 /**
  * Whether [sessionId]'s chat is this row's: a bot's, a task's, a checkout's
- * chat, or one folded away under a collapsed checkout's row.
+ * chat, or one folded away under a collapsed project's or worktree's row.
  */
 private fun ProjectHomeRow.shows(sessionId: String): Boolean = when (this) {
     is ProjectHomeRow.Bot -> session.id == sessionId
     is ProjectHomeRow.Task -> session.id == sessionId
     is ProjectHomeRow.Archived -> session.id == sessionId
     is ProjectHomeRow.Chat -> session.id == sessionId
-    is ProjectHomeRow.ProjectCard -> collapsed && project.tabs.any { it.id == sessionId }
+    is ProjectHomeRow.ProjectCard -> collapsed && sessionId in sessionIds
     is ProjectHomeRow.Worktree -> collapsed && worktree.tabs.any { it.id == sessionId }
     else -> false
 }

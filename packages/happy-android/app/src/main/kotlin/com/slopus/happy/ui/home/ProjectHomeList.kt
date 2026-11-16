@@ -302,23 +302,22 @@ private fun ProjectGitChanges(session: SessionRowData?) {
 }
 
 /**
- * A project's card: it goes by the project's name and heads the project's
- * own checkout, whose chats a tap folds away or lists again (a light tick,
- * then the list changes; a chevron says which). Folded, it speaks for them:
- * the name shimmers while one works, and the dot shows one waiting or
- * unread; open, they speak for themselves. The trailing `+` (and a long
- * press) creates a workspace in it; a stem drops from the avatar to the
- * first row under it.
+ * A project's card: it goes by the project's name and heads everything in the
+ * project, its own chats and its worktrees with theirs, which a tap folds away
+ * or lists again (a light tick, then the list changes; a chevron says which).
+ * Folded, it speaks for them: the name shimmers while one works, and the dot
+ * shows one waiting or unread; open, it speaks for its own chats only. The
+ * trailing `+` (and a long press) creates a workspace in it; a stem drops
+ * from the avatar to the first row under it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectCardRow(project: ProjectHomeEntry, collapsed: Boolean, callbacks: HomeListCallbacks, carded: Boolean) {
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(project.id) } }
     val colors = HappyTheme.colors
-    val checkoutId = project.checkoutId
     val origin: WorkspaceOrigin? = (project.session ?: project.avatarSession)?.let(::workspaceOrigin)
     val stem = treeLine()
-    val flip = checkoutFlip(checkoutId, callbacks)
+    val flip = checkoutFlip(project.foldId, callbacks)
     Row(
         modifier = Modifier
             .padding(top = if (carded) 0.dp else ProjectListSpec.projectRowTop)
@@ -326,12 +325,11 @@ private fun ProjectCardRow(project: ProjectHomeEntry, collapsed: Boolean, callba
             .height(ProjectListSpec.projectRow)
             .testTag(ProjectListTags.PROJECT)
             .combinedClickable(
-                enabled = flip != null || origin != null,
                 role = Role.Button,
-                onClick = { flip?.invoke() },
+                onClick = flip,
                 onLongClick = origin?.let { { callbacks.onProjectMenu(project.name, it) } },
             )
-            .then(if (flip != null) Modifier.foldSemantics(collapsed, flip) else Modifier)
+            .foldSemantics(collapsed, flip)
             .padding(horizontal = ProjectListSpec.rowPaddingX),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -339,7 +337,8 @@ private fun ProjectCardRow(project: ProjectHomeEntry, collapsed: Boolean, callba
             project.avatarSession?.let {
                 Avatar(id = it.avatarId, size = ProjectListSpec.avatar, imageUri = it.projectAvatarUri, thumbhash = it.projectAvatarThumbhash)
             }
-            if (project.worktreeCount > 0 || (checkoutId != null && !collapsed)) {
+            // Folded, nothing hangs under it.
+            if (!collapsed) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -369,16 +368,15 @@ private fun ProjectCardRow(project: ProjectHomeEntry, collapsed: Boolean, callba
                     Icon(Ionicon.Add, size = 18.dp, color = colors.textSecondary, contentDescription = stringResource(R.string.home_create_workspace_in, project.name))
                 }
             }
-            if (checkoutId != null) FoldChevron(collapsed)
+            FoldChevron(collapsed)
         }
     }
 }
 
-/** A checkout's fold: a light tick, then its chats go or come back (ProjectHomeList.tsx's toggle). Null without a checkout. */
+/** A project's or a worktree's fold: a light tick, then what is under its row goes or comes back (ProjectHomeList.tsx's toggle). */
 @Composable
-private fun checkoutFlip(checkoutId: String?, callbacks: HomeListCallbacks): (() -> Unit)? {
+private fun checkoutFlip(checkoutId: String, callbacks: HomeListCallbacks): () -> Unit {
     val haptics = LocalHapticFeedback.current
-    if (checkoutId == null) return null
     return {
         haptics.light()
         callbacks.onToggleCheckout(checkoutId)
@@ -452,7 +450,7 @@ private fun BoxScope.TreeTrunk() {
 private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boolean, callbacks: HomeListCallbacks) {
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(worktree.id) } }
     val colors = HappyTheme.colors
-    val flip = checkoutFlip(worktree.id, callbacks)!!
+    val flip = checkoutFlip(worktree.id, callbacks)
     Row(
         modifier = Modifier
             .fillMaxWidth()
