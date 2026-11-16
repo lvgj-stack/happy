@@ -196,7 +196,7 @@ class ComposeJourneyTest {
         rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag(ComposerPickerTags.MODEL) and hasAnyDescendant(hasText("GPT-6.1 Sol")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.node(ComposerPickerTags.MODEL).performClick()
         rule.waitFor(PickerSheetTags.option("claude:opus"))
-        rule.onNodeWithText("Fable 5.1").assertDoesNotExist()
+        rule.onNodeWithText("Fable 5.2").assertDoesNotExist()
         rule.node(PickerSheetTags.option("claude:opus")).performClick()
         rule.waitUntil(5_000) { newSession.draft.value.modelMode == "claude:opus" }
         rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag(ComposerPickerTags.EFFORT) and hasAnyDescendant(hasText("Medium")), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
