@@ -587,21 +587,32 @@ class HomeLayoutTest {
     }
 
     @Test
-    fun aFoldedCheckoutKeepsOnlyItsRow() {
-        show(
-            state(
-                checkouts,
-                grouping = SessionListGrouping.Project,
-                machines = listOf(rig),
-                collapsed = setOf(worktreePlaceId("p1", ""), worktreePlaceId("p1", "w1")),
-            ),
-        )
+    fun aFoldedProjectKeepsOnlyItsRow() {
+        show(state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig), collapsed = setOf(worktreePlaceId("p1", ""))))
+        // Its own chats and its worktree with that one's chats all go, and nothing hangs from its avatar.
         rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true).assertCountEquals(0)
-        val project = rule.node(ProjectListTags.PROJECT).bounds
-        assertDp("the worktree right under its project", project.bottom, rule.node(ProjectListTags.WORKTREE).bounds.top)
+        rule.onAllNodesWithTag(ProjectListTags.WORKTREE, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithTag(ProjectListTags.TREE_STEM, useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodesWithTag(ProjectListTags.CHEVRON, useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test
+    fun aFoldedWorktreeKeepsOnlyItsRow() {
+        show(state(checkouts, grouping = SessionListGrouping.Project, machines = listOf(rig), collapsed = setOf(worktreePlaceId("p1", "w1"))))
+        // The project's own chat stays; the worktree's goes.
+        rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT, useUnmergedTree = true).assertCountEquals(1)
+        rule.onNodeWithText("Fix login", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("Ship it", useUnmergedTree = true).assertDoesNotExist()
         // The project's stem still reaches its worktree; the folded worktree drops none.
         rule.onAllNodesWithTag(ProjectListTags.TREE_STEM, useUnmergedTree = true).assertCountEquals(1)
         rule.onAllNodesWithTag(ProjectListTags.CHEVRON, useUnmergedTree = true).assertCountEquals(2)
+    }
+
+    @Test
+    fun aProjectWithOnlyWorktreesFoldsToo() {
+        show(state(checkouts.filter { it.id == "wt" }, grouping = SessionListGrouping.Project, machines = listOf(rig)))
+        rule.onAllNodesWithTag(ProjectListTags.CHEVRON, useUnmergedTree = true).assertCountEquals(2)
+        rule.node(ProjectListTags.PROJECT).assert(SemanticsMatcher.keyIsDefined(SemanticsActions.Collapse))
     }
 
     /** A tap on a checkout's row, or TalkBack's expand and collapse, folds it after a light tick; it opens no chat. */

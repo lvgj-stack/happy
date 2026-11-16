@@ -4,10 +4,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.slopus.happy.model.HomeModelFixtures.machine
 import com.slopus.happy.model.HomeModelFixtures.machineMetadata
@@ -36,8 +38,8 @@ import java.time.ZoneOffset
 
 /**
  * The sidebar marks the row of what the main panel shows on a Happy CLI
- * account grouped by project too: the open chat's own row, or, while its
- * checkout is folded, the project's or the worktree's, and nothing else.
+ * account grouped by project too: the open chat's own row, or, while it is
+ * folded away, the folded project's or worktree's, and nothing else.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(qualifiers = PHONE)
@@ -95,7 +97,14 @@ class SidebarProjectSelectionTest {
     fun aFoldedProjectStandsForItsOpenChat() {
         show("own", collapsed = setOf(worktreePlaceId("p1", "")))
         card(ProjectListTags.PROJECT).assertIsSelected()
-        chats()[0].assert(notSelected)
+        chats().assertCountEquals(0)
+    }
+
+    @Test
+    fun aFoldedProjectStandsForItsWorktreesOpenChatToo() {
+        show("wt", collapsed = setOf(worktreePlaceId("p1", "")))
+        card(ProjectListTags.PROJECT).assertIsSelected()
+        rule.onAllNodesWithTag(ProjectListTags.WORKTREE, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

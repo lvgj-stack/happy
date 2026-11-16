@@ -35,7 +35,8 @@ data class LocalSettingsValues(
     val expandedProjects: Map<String, Boolean> = emptyMap(),
     /**
      * Checkouts whose chats the grouped home folds away, by checkout id
-     * (`worktreePlaceId`); every other one lists its chats. Android's own
+     * (`worktreePlaceId`); a project's own id (no workspace) folds the whole
+     * project, worktrees too. Every other one lists its chats. Android's own
      * key, not in happy-app's schema.
      */
     val collapsedCheckouts: Map<String, Boolean> = emptyMap(),

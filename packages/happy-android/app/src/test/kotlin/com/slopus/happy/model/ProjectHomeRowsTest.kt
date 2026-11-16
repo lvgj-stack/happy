@@ -226,14 +226,44 @@ class ProjectHomeRowsTest {
         assertEquals(listOf("own", "s1", "s2", "s3"), rows.filterIsInstance<ProjectHomeRow.Chat>().map { it.session.id })
     }
 
-    @Test fun foldingTheProjectsOwnCheckoutLeavesItsWorktreesOpen() {
-        val own = worktreePlaceId("rig:happy", "")
-        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(1))), collapsed = setOf(own))
-        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(1)", "worktree:w1:last", "  chat:s1:last"), shape(rows, chats = true))
+    @Test fun foldingAProjectHidesEverythingUnderIt() {
+        val fold = worktreePlaceId("rig:happy", "")
+        val rows = build(listOf(project("happy", ProjectSource.Rig, worktrees(4))), collapsed = setOf(fold))
+        // Its own chats, its worktrees with theirs, and the toggle ending them all go.
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(4)"), shape(rows, chats = true))
         (rows[2] as ProjectHomeRow.ProjectCard).let {
             assertTrue(it.collapsed)
-            assertEquals(own, it.project.checkoutId)
+            assertEquals(fold, it.project.foldId)
+            assertEquals(setOf("own", "s1", "s2", "s3", "s4"), it.sessionIds)
         }
+    }
+
+    @Test fun aFoldedProjectSpeaksForEverythingUnderIt() {
+        val data = listOf(project("happy", ProjectSource.Rig, listOf(
+            ws("", null, row("own")),
+            ws("w1", "w1", row("s1", state = SessionState.Thinking)),
+            ws("w2", "w2", row("s2", state = SessionState.PermissionRequired, hasUnread = true)),
+        )))
+        // Open, the card answers for its own checkout only; the worktrees speak for themselves.
+        card(build(data)[2]).let { assertFalse(it.working); assertFalse(it.blocked); assertFalse(it.unread) }
+        assertEquals(emptySet<String>(), (build(data)[2] as ProjectHomeRow.ProjectCard).sessionIds)
+        // Folded, nothing under it is drawn, so it answers for all of it.
+        card(build(data, collapsed = setOf(worktreePlaceId("rig:happy", "")))[2]).let {
+            assertTrue(it.working)
+            assertTrue(it.blocked)
+            assertTrue(it.unread)
+        }
+    }
+
+    @Test fun unfoldingAProjectBringsBackItsWorktreesOwnFolds() {
+        val w1 = worktreePlaceId("rig:happy", "w1")
+        val folded = build(listOf(project("happy", ProjectSource.Rig, worktrees(2))), collapsed = setOf(worktreePlaceId("rig:happy", ""), w1))
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(2)"), shape(folded, chats = true))
+        val open = build(listOf(project("happy", ProjectSource.Rig, worktrees(2))), collapsed = setOf(w1))
+        assertEquals(
+            listOf("machine:Studio", "section:Projects", "project:happy(2)", "chat:own", "worktree:w1", "worktree:w2:last", "  chat:s2:last"),
+            shape(open, chats = true),
+        )
     }
 
     @Test fun foldingAWorktreeLeavesTheRestOpen() {
@@ -246,12 +276,16 @@ class ProjectHomeRowsTest {
         assertFalse((rows[5] as ProjectHomeRow.Worktree).collapsed)
     }
 
-    @Test fun aProjectWithOnlyWorktreesHasNoCheckoutToFold() {
-        val rows = build(listOf(project("happy", ProjectSource.Rig, listOf(ws("w", "Vilnius", row("a"))))))
-        (rows[2] as ProjectHomeRow.ProjectCard).let {
-            assertNull(it.project.checkoutId)
+    @Test fun aProjectWithOnlyWorktreesFoldsToo() {
+        val data = listOf(project("happy", ProjectSource.Rig, listOf(ws("w", "Vilnius", row("a")))))
+        val fold = worktreePlaceId("rig:happy", "")
+        (build(data)[2] as ProjectHomeRow.ProjectCard).let {
+            assertEquals(fold, it.project.foldId)
             assertFalse(it.collapsed)
         }
+        val rows = build(data, collapsed = setOf(fold))
+        assertEquals(listOf("machine:Studio", "section:Projects", "project:happy(1)"), shape(rows, chats = true))
+        assertTrue((rows[2] as ProjectHomeRow.ProjectCard).collapsed)
     }
 
     // A chat is only ever one row of the list, which keys on it.
