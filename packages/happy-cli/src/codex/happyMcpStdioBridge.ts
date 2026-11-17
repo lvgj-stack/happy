@@ -1,9 +1,9 @@
 /**
  * Happy MCP STDIO Bridge
  *
- * Minimal STDIO MCP server exposing a single tool `change_title`.
- * On invocation it forwards the tool call to an existing Happy HTTP MCP server
- * using the StreamableHTTPClientTransport.
+ * Minimal STDIO MCP server exposing the Happy tools `change_title` and
+ * `send_image`. On invocation it forwards the tool call to an existing Happy
+ * HTTP MCP server using the StreamableHTTPClientTransport.
  *
  * Configure the target HTTP MCP URL via env var `HAPPY_HTTP_MCP_URL` or
  * via CLI flag `--url <http://127.0.0.1:PORT>`.
@@ -16,6 +16,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { z } from 'zod';
+import { SEND_IMAGE_TOOL } from '@/claude/utils/sendImageTool';
 
 function parseArgs(argv: string[]): { url: string | null } {
   let url: string | null = null;
@@ -63,7 +64,7 @@ async function main() {
     version: '1.0.0',
   });
 
-  // Register the single tool and forward to HTTP MCP
+  // Register the tools and forward to HTTP MCP
   server.registerTool(
     'change_title',
     {
@@ -83,6 +84,31 @@ async function main() {
         return {
           content: [
             { type: 'text', text: `Failed to change chat title: ${error instanceof Error ? error.message : String(error)}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    SEND_IMAGE_TOOL.name,
+    {
+      description: SEND_IMAGE_TOOL.description,
+      title: SEND_IMAGE_TOOL.title,
+      inputSchema: {
+        path: z.string().describe(SEND_IMAGE_TOOL.pathDescription),
+      },
+    },
+    async (args) => {
+      try {
+        const client = await ensureHttpClient();
+        const response = await client.callTool({ name: SEND_IMAGE_TOOL.name, arguments: args });
+        return response as any;
+      } catch (error) {
+        return {
+          content: [
+            { type: 'text', text: `Failed to send image: ${error instanceof Error ? error.message : String(error)}` },
           ],
           isError: true,
         };

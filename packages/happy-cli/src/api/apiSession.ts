@@ -7,6 +7,7 @@ import { backoff, delay } from '@/utils/time';
 import { configuration } from '@/configuration';
 import { RawJSONLines } from '@/claude/types';
 import { randomUUID } from 'node:crypto';
+import { createId } from '@paralleldrive/cuid2';
 import { AsyncLock } from '@/utils/lock';
 import { deriveKey } from '@/utils/deriveKey';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
@@ -88,6 +89,8 @@ export type LocalImageAttachment = {
     data: Uint8Array;
     mimeType: string;
     name: string;
+    /** Pixel size, when the sender could read it: the apps lay the picture out before it loads. */
+    image?: { width: number; height: number };
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -219,6 +222,12 @@ export class ApiSessionClient extends EventEmitter {
     private closed = false;
     private ignoreArchiveSignal = false;
     private skipInitialMessages = false;
+    /**
+     * The agent turn the latest session-protocol envelopes opened and have
+     * not yet closed, whichever agent wrote them: an agent's own messages are
+     * dropped by both apps when they carry no turn.
+     */
+    private openAgentTurn: string | null = null;
     private claudeSessionProtocolState: ClaudeSessionProtocolState = {
         currentTurnId: null,
         uuidToProviderSubagent: new Map<string, string>(),
@@ -474,22 +483,42 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
-    async uploadLocalImageAttachmentEnvelope(
-        attachment: LocalImageAttachment,
-        opts: Pick<CreateEnvelopeOptions, 'id' | 'time' | 'claudeUuid' | 'codexItemId'> = {},
-    ): Promise<SessionEnvelope> {
+    private async uploadLocalImageAttachmentEvent(attachment: LocalImageAttachment): Promise<SessionEnvelope['ev']> {
         const blobKey = await this.getBlobKey();
         const encrypted = encryptBlob(attachment.data, blobKey);
         const upload = await this.requestAttachmentUpload(attachment.name, encrypted.length);
         await this.uploadEncryptedAttachmentBlob(upload, encrypted);
 
-        return createEnvelope('user', {
+        return {
             t: 'file',
             ref: upload.ref,
             name: attachment.name,
             size: attachment.data.length,
             mimeType: attachment.mimeType,
-        }, opts);
+            ...(attachment.image ? { image: attachment.image } : {}),
+        };
+    }
+
+    async uploadLocalImageAttachmentEnvelope(
+        attachment: LocalImageAttachment,
+        opts: Pick<CreateEnvelopeOptions, 'id' | 'time' | 'claudeUuid' | 'codexItemId'> = {},
+    ): Promise<SessionEnvelope> {
+        return createEnvelope('user', await this.uploadLocalImageAttachmentEvent(attachment), opts);
+    }
+
+    /**
+     * Show a picture the agent made or found to the user: encrypt and upload
+     * it as a session attachment, then post the file event as the agent. The
+     * promise settles once the blob is stored; a failed upload posts nothing.
+     */
+    async sendAgentImage(attachment: LocalImageAttachment): Promise<SessionEnvelope> {
+        const event = await this.uploadLocalImageAttachmentEvent(attachment);
+        // Joins the turn the agent is in. An agent that writes no session
+        // turns (Gemini's ACP records) gets a turn of its own for the picture,
+        // so the apps do not drop it as a turnless agent message.
+        const envelope = createEnvelope('agent', event, { turn: this.openAgentTurn ?? createId() });
+        this.enqueueSessionProtocolEnvelope(envelope);
+        return envelope;
     }
 
     /**
@@ -803,6 +832,10 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private enqueueSessionProtocolEnvelope(envelope: SessionEnvelope, invalidate: boolean = true) {
+        if (envelope.role === 'agent' && !envelope.subagent && envelope.turn) {
+            if (envelope.ev.t === 'turn-start') this.openAgentTurn = envelope.turn;
+            if (envelope.ev.t === 'turn-end' && this.openAgentTurn === envelope.turn) this.openAgentTurn = null;
+        }
         const content = {
             role: 'session',
             content: envelope,

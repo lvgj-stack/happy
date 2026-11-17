@@ -66,7 +66,9 @@ export const sessionFileEventSchema = z.object({
     .object({
       width: z.number(),
       height: z.number(),
-      thumbhash: z.string(),
+      // Optional: a sender with no canvas (the native pickers, the CLI) knows
+      // the size but cannot compute a thumbhash. Both apps read it as optional.
+      thumbhash: z.string().optional(),
     })
     .optional(),
 });

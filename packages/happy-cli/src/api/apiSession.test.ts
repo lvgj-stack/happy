@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createEnvelope } from '@slopus/happy-wire';
 import { ApiSessionClient } from './apiSession';
 import { decodeBase64, decrypt, decryptBlob, encodeBase64, encrypt } from './encryption';
 import type { Update } from './types';
@@ -630,6 +631,108 @@ describe('ApiSessionClient v3 messages API migration', () => {
         const uploadBody = mockAxiosPut.mock.calls[0][1];
         const blobKey = await client.getBlobKey();
         expect(decryptBlob(new Uint8Array(uploadBody), blobKey)).toEqual(pngBytes);
+    });
+
+    it('uploads a picture the agent shows and posts it as the agent', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+        mockAxiosPost.mockImplementation(async (url: string, payload: any) => {
+            if (url.endsWith('/attachments/request-upload')) {
+                // The server counts the encrypted blob: nonce and auth tag on top.
+                expect(payload).toEqual({ filename: 'chart.png', size: pngBytes.length + 40 });
+                return {
+                    data: {
+                        ref: 'sessions/test-session-id/attachments/chart.enc',
+                        uploadUrl: 'https://server.test/v1/sessions/test-session-id/attachments/chart.enc',
+                        method: 'PUT',
+                    },
+                };
+            }
+
+            return {
+                data: {
+                    messages: payload.messages.map((_message: unknown, index: number) => ({
+                        id: `msg-${index + 1}`,
+                        seq: index + 1,
+                        localId: `local-${index + 1}`,
+                        createdAt: 1,
+                        updatedAt: 1,
+                    })),
+                },
+            };
+        });
+        mockAxiosPut.mockResolvedValueOnce({ data: { ok: true } });
+
+        const fileEvent = {
+            t: 'file',
+            ref: 'sessions/test-session-id/attachments/chart.enc',
+            name: 'chart.png',
+            size: pngBytes.length,
+            mimeType: 'image/png',
+            image: { width: 640, height: 480 },
+        };
+        const envelope = await client.sendAgentImage({
+            data: pngBytes,
+            mimeType: 'image/png',
+            name: 'chart.png',
+            image: { width: 640, height: 480 },
+        });
+        expect(envelope).toMatchObject({ role: 'agent', ev: fileEvent });
+        // Both apps drop an agent message with no turn.
+        expect(typeof envelope.turn).toBe('string');
+
+        const blobKey = await client.getBlobKey();
+        expect(decryptBlob(new Uint8Array(mockAxiosPut.mock.calls[0][1]), blobKey)).toEqual(pngBytes);
+
+        const messagesUrl = 'https://server.test/v3/sessions/test-session-id/messages';
+        await waitForCheck(() => {
+            expect(mockAxiosPost.mock.calls.some(([url]) => url === messagesUrl)).toBe(true);
+        });
+        const sentMessages = mockAxiosPost.mock.calls.find(([url]) => url === messagesUrl)![1].messages;
+        expect(sentMessages).toHaveLength(1);
+        expect(decrypt(session.encryptionKey, session.encryptionVariant, decodeBase64(sentMessages[0].content))).toMatchObject({
+            role: 'session',
+            content: { id: envelope.id, role: 'agent', ev: fileEvent },
+            meta: { sentFrom: 'cli' },
+        });
+    });
+
+    it('puts the picture in the turn the agent is in, whichever agent opened it', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        mockAxiosPost.mockImplementation(async (url: string, payload: any) => {
+            if (url.endsWith('/attachments/request-upload')) {
+                return { data: { ref: 'sessions/test-session-id/attachments/a.enc', uploadUrl: 'https://server.test/a.enc', method: 'PUT' } };
+            }
+            return { data: { messages: payload.messages.map((_m: unknown, i: number) => ({ id: `m${i}`, seq: i, localId: null, createdAt: 1, updatedAt: 1 })) } };
+        });
+        mockAxiosPut.mockResolvedValue({ data: { ok: true } });
+        const picture = { data: new Uint8Array([1, 2, 3]), mimeType: 'image/png', name: 'a.png' };
+
+        // A Codex or ACP turn, sent as ready-made envelopes.
+        client.sendSessionProtocolMessage(createEnvelope('agent', { t: 'turn-start' }, { turn: 'turn-codex' }));
+        // A subagent's turn is not the one the user is watching.
+        client.sendSessionProtocolMessage(createEnvelope('agent', { t: 'turn-start' }, { turn: 'turn-sub', subagent: 'subagent1' }));
+        expect((await client.sendAgentImage(picture)).turn).toBe('turn-codex');
+
+        client.sendSessionProtocolMessage(createEnvelope('agent', { t: 'turn-end', status: 'completed' }, { turn: 'turn-codex' }));
+        const afterTurn = await client.sendAgentImage(picture);
+        expect(afterTurn.turn).toEqual(expect.any(String));
+        expect(afterTurn.turn).not.toBe('turn-codex');
+    });
+
+    it('posts nothing when the picture cannot be uploaded', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        mockAxiosPost.mockRejectedValue(new Error('Request failed with status code 413'));
+
+        await expect(client.sendAgentImage({
+            data: new Uint8Array([1, 2, 3]),
+            mimeType: 'image/png',
+            name: 'chart.png',
+        })).rejects.toThrow('413');
+
+        expect(mockAxiosPut).not.toHaveBeenCalled();
+        expect(mockAxiosPost.mock.calls.every(([url]) => String(url).endsWith('/attachments/request-upload'))).toBe(true);
     });
 
     it('sends session protocol messages through enqueueMessage with session envelope', async () => {

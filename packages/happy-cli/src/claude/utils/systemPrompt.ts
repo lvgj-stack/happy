@@ -6,6 +6,8 @@ import { shouldIncludeCoAuthoredBy } from "./claudeSettings";
  */
 const BASE_SYSTEM_PROMPT = (() => trimIdent(`
     ALWAYS when you start a new chat - you must call a tool "mcp__happy__change_title" to set a chat title. When you think chat title is not relevant anymore - call the tool again to change it. When chat name is too generic and you have a change to make it more specific - call the tool again to change it. This title is needed to easily find the chat in the future. Help human.
+
+    When you create or find an image file the human should see (a chart, a screenshot, a diagram, a generated picture) - call a tool "mcp__happy__send_image" with its absolute path. The human is often on a phone and cannot open files on this machine; the tool shows the image right in the chat.
 `))();
 
 /**
