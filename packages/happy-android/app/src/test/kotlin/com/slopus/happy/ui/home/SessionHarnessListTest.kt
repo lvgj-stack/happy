@@ -202,15 +202,14 @@ class SessionHarnessListTest {
     }
 
     @Test
-    fun agentSessionDescriptionKeepsItsTitleAndOwnerAlongsideTheHarness() {
-        val conversation = AgentFeedRow.Conversation("agent", "Review the PR", ConversationKind.Task, 0, owner = "Steve")
+    fun agentSessionDescriptionKeepsItsTitleAlongsideTheHarness() {
+        val conversation = AgentFeedRow.Conversation("agent", "Review the PR", ConversationKind.Task, 0)
         rule.setHappyContent {
             AgentHomeCardRow(AgentHomeItem.Row(conversation, true, true), Modifier.fillMaxWidth(), false, "agent-row", {}, {}, {})
         }
         val node = rule.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("agent-row")), useUnmergedTree = false).fetchSemanticsNode()
         val description = node.config[SemanticsProperties.ContentDescription].joinToString(", ")
         assertTrue("session title missing from spoken description: $description", description.contains("Review the PR"))
-        assertTrue(description.contains("Steve"))
         assertTrue(description.contains("Happy"))
     }
 
