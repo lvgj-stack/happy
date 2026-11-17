@@ -41,6 +41,7 @@ object SettingsTags {
     const val WHATS_NEW = "settings.row.whatsNew"
     const val GITHUB = "settings.row.github"
     const val REPORT_ISSUE = "settings.row.reportIssue"
+    const val CRASH_REPORTS = "settings.row.crashReports"
     const val PRIVACY = "settings.row.privacy"
     const val TERMS = "settings.row.terms"
 }

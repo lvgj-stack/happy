@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values/strings_diagnostics.xml in ru. AndroidStringsTranslatedTest fails while one is missing here.
+-->
+<resources>
+    <string name="settings_crash_reports">Отчёты о сбоях</string>
+    <string name="settings_crash_reports_subtitle">Скопировать то, что приложение записало о последних сбоях</string>
+    <string name="settings_crash_reports_copy_failed">Не удалось скопировать отчёт о сбоях.</string>
+</resources>

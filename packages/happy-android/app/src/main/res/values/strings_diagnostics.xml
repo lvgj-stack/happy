@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Strings with no happy-app catalog key: Settings > About > Crash reports
+  (diagnostics/CrashLog.kt). Translated in values-*/ (AndroidStringsTranslatedTest).
+-->
+<resources>
+    <string name="settings_crash_reports">Crash reports</string>
+    <string name="settings_crash_reports_subtitle">Copy what the app recorded of its recent crashes</string>
+    <string name="settings_crash_reports_copy_failed">The crash report couldn\'t be copied.</string>
+</resources>

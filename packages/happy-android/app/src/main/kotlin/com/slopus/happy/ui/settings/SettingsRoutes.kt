@@ -252,8 +252,13 @@ internal fun rememberAboutActions(graph: AppGraph, nav: NavHostController): Abou
     val developerModeEnabled = stringResource(R.string.modals_developer_mode_enabled)
     val developerModeDisabled = stringResource(R.string.modals_developer_mode_disabled)
     val ok = stringResource(R.string.common_ok)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val crashReports = stringResource(R.string.settings_crash_reports)
+    val crashReportsCopied = stringResource(R.string.items_copied_to_clipboard, crashReports)
+    val crashReportsFailed = stringResource(R.string.settings_crash_reports_copy_failed)
     alerts.Host()
-    return remember(graph, nav, uriHandler, linkOpener, support, developerMode, developerModeEnabled, developerModeDisabled, ok) {
+    return remember(graph, nav, uriHandler, linkOpener, support, developerMode, developerModeEnabled, developerModeDisabled, ok, context, scope, crashReports, crashReportsCopied, crashReportsFailed) {
         AboutActions(
             onOpenUrl = { url -> openExternalUrl(uriHandler, url) },
             onWhatsNew = { nav.navigate(ChangelogRoute) },
@@ -265,6 +270,14 @@ internal fun rememberAboutActions(graph: AppGraph, nav: NavHostController): Abou
                 }
             },
             onSupport = support,
+            onCrashReports = {
+                scope.launch {
+                    val app = context.applicationContext as com.slopus.happy.HappyApplication
+                    val report = withContext(Dispatchers.IO) { com.slopus.happy.diagnostics.CrashLog.report(app, app.buildLine) }
+                    val copied = com.slopus.happy.ui.home.copyToClipboard(context, report)
+                    alerts.show(Alert(crashReports, if (copied) crashReportsCopied else crashReportsFailed, listOf(AlertButton(ok))))
+                }
+            },
             onManageSubscriptions = {
                 if (linkOpener != null) linkOpener.openExternal(SettingsSpec.SUBSCRIPTIONS_URL)
                 else openExternalUrl(uriHandler, SettingsSpec.SUBSCRIPTIONS_URL)

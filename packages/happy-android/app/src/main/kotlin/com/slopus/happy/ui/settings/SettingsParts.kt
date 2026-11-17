@@ -374,6 +374,8 @@ class AboutActions(
     /** A tap on Version; ten in a row toggle developer mode (useMultiClick). */
     val onVersion: () -> Unit = {},
     val onSupport: () -> Unit = {},
+    /** Crash reports: copies what [com.slopus.happy.diagnostics.CrashLog] has. */
+    val onCrashReports: () -> Unit = {},
     /** Billing belongs to the phone's store/account, even with an agent's proxied browser open. */
     val onManageSubscriptions: () -> Unit = { onOpenUrl(SettingsSpec.SUBSCRIPTIONS_URL) },
 )
@@ -411,7 +413,8 @@ fun supportSection(about: AboutInfo, actions: AboutActions) = SettingsSection(
 /**
  * About (iOS's `aboutRows`, SettingsView.tsx's About without its title):
  * What's New, GitHub with "slopus/happy", Report an Issue, Privacy Policy,
- * Terms of Service and Version, the app's line under the card. No EULA:
+ * Terms of Service and Version, the app's line under the card. Crash
+ * reports (Android's own) sits after Report an Issue: what to attach to one. No EULA:
  * happy-app shows Apple's on iOS only. The four rows that open a page
  * offer the link menu on a long press, as links in text do.
  */
@@ -438,6 +441,14 @@ fun aboutSection(about: AboutInfo, actions: AboutActions) = SettingsSection(
             icon = { SettingsTile(Ionicon.BugOutline, SettingsTiles.red) },
             onClick = { actions.onOpenUrl(SettingsSpec.ISSUES_URL) },
             onLongClick = rememberLinkMenu(SettingsSpec.ISSUES_URL),
+        ),
+        SettingsEntry(
+            id = SettingsTags.CRASH_REPORTS,
+            title = stringResource(R.string.settings_crash_reports),
+            subtitle = stringResource(R.string.settings_crash_reports_subtitle),
+            icon = { SettingsTile(Ionicon.PulseOutline, SettingsTiles.gray) },
+            chevron = false,
+            onClick = actions.onCrashReports,
         ),
         SettingsEntry(
             id = SettingsTags.PRIVACY,
