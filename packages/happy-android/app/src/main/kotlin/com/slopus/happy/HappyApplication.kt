@@ -2,6 +2,7 @@ package com.slopus.happy
 
 import android.app.Application
 import com.slopus.happy.data.DiskThread
+import com.slopus.happy.diagnostics.CrashLog
 import com.slopus.happy.diagnostics.traced
 import com.slopus.happy.push.PushServices
 import kotlinx.coroutines.CompletableDeferred
@@ -10,6 +11,10 @@ import kotlin.concurrent.thread
 
 class HappyApplication : Application() {
     /** Built on first use. The main thread never asks for it: it waits for [graphReady]. */
+    /** Which build this is, heading a crash record and the report. */
+    val buildLine: String
+        get() = "Happy ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) ${BuildConfig.BUILD_TYPE} $packageName, commit ${BuildConfig.BUILD_COMMIT_SHA ?: "unknown"}"
+
     val graph: AppGraph by lazy {
         traced("AppGraph") {
             AppGraph(
@@ -44,6 +49,7 @@ class HappyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this, buildLine)
         if (BuildConfig.DEBUG) DiskThread.watch()
     }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values/strings_diagnostics.xml in b+zh+Hant. AndroidStringsTranslatedTest fails while one is missing here.
+-->
+<resources>
+    <string name="settings_crash_reports">當機記錄</string>
+    <string name="settings_crash_reports_subtitle">複製應用程式最近記錄的當機資訊</string>
+    <string name="settings_crash_reports_copy_failed">無法複製當機記錄。</string>
+</resources>

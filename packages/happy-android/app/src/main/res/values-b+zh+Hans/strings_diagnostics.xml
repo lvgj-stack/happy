@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values/strings_diagnostics.xml in b+zh+Hans. AndroidStringsTranslatedTest fails while one is missing here.
+-->
+<resources>
+    <string name="settings_crash_reports">崩溃记录</string>
+    <string name="settings_crash_reports_subtitle">复制应用最近记录的崩溃信息</string>
+    <string name="settings_crash_reports_copy_failed">无法复制崩溃记录。</string>
+</resources>

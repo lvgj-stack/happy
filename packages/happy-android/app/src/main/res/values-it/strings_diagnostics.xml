@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values/strings_diagnostics.xml in it. AndroidStringsTranslatedTest fails while one is missing here.
+-->
+<resources>
+    <string name="settings_crash_reports">Rapporti di arresto</string>
+    <string name="settings_crash_reports_subtitle">Copia ciò che l\'app ha registrato dei suoi ultimi arresti anomali</string>
+    <string name="settings_crash_reports_copy_failed">Impossibile copiare il rapporto.</string>
+</resources>
