@@ -403,7 +403,7 @@ class AgentConnectionSettingsTest {
             AgentAppearanceScreen(ThemePreference.Adaptive, {}, projectsHidden = false, onProjectsHidden = {}, onBack = {})
         }
         rule.node("agentPages.harnessIcons").performScrollTo().assertIsOn()
-        rule.onNodeWithText("Display harness icons next to session titles").assertIsDisplayed()
+        rule.onNodeWithText("Display harness icons next to session titles").performScrollTo().assertIsDisplayed()
     }
 
     @Test
