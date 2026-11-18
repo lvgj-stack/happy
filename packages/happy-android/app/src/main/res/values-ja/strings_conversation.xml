@@ -80,6 +80,9 @@
     <string name="conversation_media_no_app">このスマートフォンにはこの種類のファイルを開けるアプリがありません。</string>
     <string name="conversation_media_failed">開けませんでした。タップしてもう一度お試しください。</string>
     <string name="conversation_picture_close">画像を閉じる</string>
+    <string name="conversation_picture_save">写真に保存</string>
+    <string name="conversation_picture_saved">写真に保存しました</string>
+    <string name="conversation_picture_save_failed">この画像を保存できませんでした。</string>
     <string name="conversation_chief_unavailable">Chief of Staff を開けません</string>
     <string name="conversation_chief_missing">このコンピュータには Chief of Staff がいません。</string>
     <string name="conversation_mode_permission">権限</string>

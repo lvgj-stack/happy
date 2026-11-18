@@ -80,6 +80,9 @@
     <string name="conversation_media_no_app">Res en aquest telèfon obre aquest tipus de fitxer.</string>
     <string name="conversation_media_failed">No s\'ha pogut obrir. Toca per tornar-ho a provar.</string>
     <string name="conversation_picture_close">Tanca la imatge</string>
+    <string name="conversation_picture_save">Desa a Fotos</string>
+    <string name="conversation_picture_saved">Desada a Fotos</string>
+    <string name="conversation_picture_save_failed">No s\'ha pogut desar aquesta imatge.</string>
     <string name="conversation_chief_unavailable">No es pot obrir el Chief of Staff</string>
     <string name="conversation_chief_missing">No hi ha cap Chief of Staff en aquest ordinador.</string>
     <string name="conversation_mode_permission">Permisos</string>

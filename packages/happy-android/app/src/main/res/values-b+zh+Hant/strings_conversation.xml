@@ -80,6 +80,9 @@
     <string name="conversation_media_no_app">此手機上沒有能開啟此類檔案的 App。</string>
     <string name="conversation_media_failed">無法開啟。點一下以重試。</string>
     <string name="conversation_picture_close">關閉圖片</string>
+    <string name="conversation_picture_save">儲存到相簿</string>
+    <string name="conversation_picture_saved">已儲存到相簿</string>
+    <string name="conversation_picture_save_failed">無法儲存此圖片。</string>
     <string name="conversation_chief_unavailable">無法開啟 Chief of Staff</string>
     <string name="conversation_chief_missing">此電腦上沒有 Chief of Staff。</string>
     <string name="conversation_mode_permission">權限</string>

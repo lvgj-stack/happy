@@ -80,6 +80,9 @@
     <string name="conversation_media_no_app">Niente su questo telefono apre questo tipo di file.</string>
     <string name="conversation_media_failed">Impossibile aprire. Tocca per riprovare.</string>
     <string name="conversation_picture_close">Chiudi immagine</string>
+    <string name="conversation_picture_save">Salva in Foto</string>
+    <string name="conversation_picture_saved">Salvata in Foto</string>
+    <string name="conversation_picture_save_failed">Impossibile salvare questa immagine.</string>
     <string name="conversation_chief_unavailable">Impossibile aprire il Chief of Staff</string>
     <string name="conversation_chief_missing">Non c\'è un Chief of Staff su questo computer.</string>
     <string name="conversation_mode_permission">Autorizzazioni</string>

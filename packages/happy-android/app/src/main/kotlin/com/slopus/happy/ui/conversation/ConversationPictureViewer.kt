@@ -105,6 +105,7 @@ import com.slopus.happy.conversation.PictureDismissal
 import com.slopus.happy.conversation.PictureViewing
 import com.slopus.happy.conversation.ViewerItem
 import com.slopus.happy.conversation.MediaFiles
+import com.slopus.happy.media.GallerySave
 import com.slopus.happy.ui.components.MaterialSymbols
 import com.slopus.happy.ui.components.RemoteImage
 import com.slopus.happy.ui.components.TrackOverlay
@@ -125,6 +126,7 @@ object PictureViewerTags {
     const val IMAGE = "conversation.picture.viewer.image"
     const val CLOSE = "conversation.picture.viewer.close"
     const val SHARE = "conversation.picture.viewer.share"
+    const val SAVE = "conversation.picture.viewer.save"
     /** The recording in view, and its play button. */
     const val VIDEO = "conversation.picture.viewer.video"
     const val PLAY = "conversation.picture.viewer.play"
@@ -177,6 +179,9 @@ interface ViewerSource {
 
     /** The item as a file under [directory] (which the app's file provider shares), for the share sheet. */
     suspend fun shareable(key: String, directory: File): File? = null
+
+    /** Whether the viewer offers Save to Photos for a picture: its [bytes] go to the phone's gallery. */
+    val saves: Boolean get() = false
 }
 
 /**
@@ -406,6 +411,12 @@ fun PictureViewer(
                 .padding(PictureViewing.CLOSE_INSET.dp)
                 .size(PictureViewing.CLOSE_SIZE.dp)
             if (source.shares) ShareButton(source, items[pager.currentPage], controls.align(Alignment.TopStart))
+            val inView = items[pager.currentPage]
+            if (source.saves && GallerySave.available && !inView.isVideo) {
+                // Beside Share, or in its place.
+                val after = if (source.shares) (PictureViewing.CLOSE_INSET + PictureViewing.CLOSE_SIZE).dp else 0.dp
+                SaveButton(source, inView, controls.align(Alignment.TopStart).padding(start = after))
+            }
             if (bottom == null) IconButton(
                 onClick = close,
                 colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White),
@@ -742,6 +753,50 @@ private fun ShareButton(source: ViewerSource, item: ViewerItem, modifier: Modifi
     ) {
         if (sharing) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
         else Icon(MaterialSymbols.Share, stringResource(R.string.artifact_share))
+    }
+}
+
+/**
+ * Save to Photos, top left beside Share: the picture in view into the
+ * phone's gallery ([GallerySave], Pictures/Happy), a spinner while it is
+ * read and written, and a toast saying whether it went.
+ */
+@Composable
+private fun SaveButton(source: ViewerSource, item: ViewerItem, modifier: Modifier) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = {
+            if (saving) return@IconButton
+            saving = true
+            scope.launch {
+                val saved = try {
+                    val bytes = source.bytes(item.key) ?: error("No bytes for ${item.key}")
+                    val type = GallerySave.imageType(bytes) ?: error("Not a picture the gallery takes")
+                    GallerySave.save(context.contentResolver, bytes, item.label ?: "picture", type)
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w("PictureViewer", "Couldn't save ${item.key}: ${e.javaClass.simpleName} ${e.message}")
+                    false
+                } finally {
+                    saving = false
+                }
+                val said = if (saved) R.string.conversation_picture_saved else R.string.conversation_picture_save_failed
+                android.widget.Toast.makeText(context, said, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        },
+        colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White),
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            .padding(PictureViewing.CLOSE_INSET.dp)
+            .size(PictureViewing.CLOSE_SIZE.dp)
+            .testTag(PictureViewerTags.SAVE),
+    ) {
+        if (saving) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+        else Icon(MaterialSymbols.Download, stringResource(R.string.conversation_picture_save))
     }
 }
 

@@ -80,6 +80,9 @@
     <string name="conversation_media_no_app">На этом телефоне нет приложения для файлов такого типа.</string>
     <string name="conversation_media_failed">Не удалось открыть. Нажмите, чтобы повторить.</string>
     <string name="conversation_picture_close">Закрыть изображение</string>
+    <string name="conversation_picture_save">Сохранить в Фото</string>
+    <string name="conversation_picture_saved">Сохранено в Фото</string>
+    <string name="conversation_picture_save_failed">Не удалось сохранить изображение.</string>
     <string name="conversation_chief_unavailable">Не удаётся открыть Chief of Staff</string>
     <string name="conversation_chief_missing">На этом компьютере нет Chief of Staff.</string>
     <string name="conversation_mode_permission">Разрешения</string>

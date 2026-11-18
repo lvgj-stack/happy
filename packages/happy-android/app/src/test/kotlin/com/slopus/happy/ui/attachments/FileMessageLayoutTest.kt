@@ -4,11 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.slopus.happy.chat.ChatMessage
@@ -22,6 +24,7 @@ import com.slopus.happy.ui.chat.MessageCallbacks
 import com.slopus.happy.ui.chat.MessageTags
 import com.slopus.happy.ui.chat.ToolTags
 import com.slopus.happy.ui.chat.MessageView
+import com.slopus.happy.ui.conversation.PictureViewerTags
 import com.slopus.happy.ui.node
 import com.slopus.happy.ui.setHappyContent
 import kotlinx.serialization.json.Json
@@ -116,6 +119,32 @@ class FileMessageLayoutTest {
         rule.node(FileMessageTags.NAME).assertTextEquals("photo.jpg")
         rule.node(FileMessageTags.ERROR).assertDoesNotExist()
         assertEquals(1, attachments.loads.get())
+    }
+
+    @Test
+    fun aTapOpensThePictureWithShareAndSave() {
+        show(input("""{"ref":"sessions/s1/attachments/a.enc","name":"chart.png","size":12,"image":{"width":64,"height":48}}"""), FakeAttachments(png))
+        rule.waitUntilAtLeastOneExists(hasContentDescription("chart.png"), 5_000)
+        rule.onAllNodes(hasTestTag(PictureViewerTags.VIEWER), useUnmergedTree = true).assertCountEquals(0)
+
+        rule.node(FileMessageTags.IMAGE).performClick()
+        rule.waitUntilAtLeastOneExists(hasTestTag(PictureViewerTags.SAVE), 5_000)
+
+        // Save sits beside Share at the top left, one 44 button and its 8 inset along.
+        val share = rule.node(PictureViewerTags.SHARE).getUnclippedBoundsInRoot()
+        val save = rule.node(PictureViewerTags.SAVE).getUnclippedBoundsInRoot()
+        assertBox("share", share, 8.dp, 8.dp, 44.dp, 44.dp)
+        assertBox("save", save, share.right + 8.dp, share.top, 44.dp, 44.dp)
+        rule.onNode(hasContentDescription("Save to Photos"), useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun aPictureThatDidNotLoadDoesNotOpen() {
+        show(input("""{"ref":"r3","name":"photo.jpg"}"""), FakeAttachments(null))
+        rule.waitUntilAtLeastOneExists(hasTestTag(FileMessageTags.ERROR), 5_000)
+        rule.node(FileMessageTags.IMAGE).performClick()
+        rule.waitForIdle()
+        rule.onAllNodes(hasTestTag(PictureViewerTags.VIEWER), useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

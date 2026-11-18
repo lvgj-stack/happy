@@ -81,6 +81,9 @@
     <string name="conversation_media_no_app">Nothing on this phone opens this kind of file.</string>
     <string name="conversation_media_failed">Couldn\'t open this. Tap to try again.</string>
     <string name="conversation_picture_close">Close picture</string>
+    <string name="conversation_picture_save">Save to Photos</string>
+    <string name="conversation_picture_saved">Saved to Photos</string>
+    <string name="conversation_picture_save_failed">Couldn\'t save this picture.</string>
     <string name="conversation_chief_of_staff" translatable="false">Chief of Staff</string>
     <string name="conversation_chief_unavailable">Can\'t open the Chief of Staff</string>
     <string name="conversation_chief_missing">There\'s no Chief of Staff on this computer.</string>

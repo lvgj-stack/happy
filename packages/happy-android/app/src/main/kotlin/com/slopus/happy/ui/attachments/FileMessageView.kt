@@ -1,6 +1,7 @@
 package com.slopus.happy.ui.attachments
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,7 +36,15 @@ import com.slopus.happy.ui.components.Icon
 import com.slopus.happy.ui.components.Ionicon
 import com.slopus.happy.ui.components.RemoteImage
 import com.slopus.happy.ui.components.RemoteImageState
+import com.slopus.happy.conversation.MediaFiles
+import com.slopus.happy.conversation.ViewerItem
+import com.slopus.happy.media.GallerySave
 import com.slopus.happy.ui.conversation.MediaStatus
+import com.slopus.happy.ui.conversation.PictureViewer
+import com.slopus.happy.ui.conversation.ViewerSource
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.slopus.happy.ui.theme.HappyTheme
 import com.slopus.happy.ui.theme.happyTextStyle
 import kotlinx.coroutines.CancellationException
@@ -163,7 +172,8 @@ object FileMessageTags {
  * before that the space is empty. If it can't be loaded, a 24 circle in
  * surfaceHigh sits 4 in from its top right with alert-circle-outline 20 in
  * textSecondary. The name: 13 medium textSecondary, one line. Nothing at
- * all when the input isn't a file event's.
+ * all when the input isn't a file event's. Once it has loaded, a tap opens
+ * it whole in [PictureViewer], with Share and Save to Photos.
  */
 @Composable
 fun FileMessageView(input: JsonElement?, modifier: Modifier = Modifier) {
@@ -175,6 +185,7 @@ fun FileMessageView(input: JsonElement?, modifier: Modifier = Modifier) {
     var failed by remember(file.ref, attachments) { mutableStateOf(false) }
     // Bumped by a tap on the ring: the picture is read whatever the rules say.
     var asked by remember(file.ref, attachments) { mutableStateOf(0) }
+    var viewing by remember(file.ref) { mutableStateOf(false) }
     LaunchedEffect(file.ref, attachments, asked) {
         if (attachments == null) return@LaunchedEffect
         val loaded = try {
@@ -203,6 +214,9 @@ fun FileMessageView(input: JsonElement?, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .size(width, height)
                 .clip(RoundedCornerShape(FileMessageSpec.radius))
+                // Only once there is a picture to open: clickable merges the box's
+                // semantics, which would fold the badge and the ring into it.
+                .then(if (bytes != null && !failed) Modifier.clickable(onClickLabel = file.name) { viewing = true } else Modifier)
                 .testTag(FileMessageTags.IMAGE),
         ) {
             bytes?.let {
@@ -249,5 +263,29 @@ fun FileMessageView(input: JsonElement?, modifier: Modifier = Modifier) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.testTag(FileMessageTags.NAME),
         )
+    }
+
+    val shown = bytes
+    if (viewing && shown != null) {
+        val key = "attachment:${file.ref}"
+        val source = remember(key, shown) { attachmentViewerSource(shown, file.name) }
+        val item = ViewerItem(key, file.name, width = file.image?.width?.toFloat(), height = file.image?.height?.toFloat(), thumbhash = file.image?.thumbhash)
+        PictureViewer(listOf(item), 0, source) { viewing = false }
+    }
+}
+
+/** One decrypted attachment for the viewer: shown from memory, shared as a file, saved to the phone's photos. */
+private fun attachmentViewerSource(bytes: ByteArray, name: String): ViewerSource = object : ViewerSource {
+    override fun cached(key: String) = bytes
+    override suspend fun bytes(key: String) = bytes
+    override val shares: Boolean get() = true
+    override val saves: Boolean get() = true
+
+    override suspend fun shareable(key: String, directory: File): File? {
+        val type = GallerySave.imageType(bytes) ?: return null
+        return withContext(Dispatchers.IO) {
+            directory.mkdirs()
+            File(directory, MediaFiles.safeName(name, type)).apply { writeBytes(bytes) }
+        }
     }
 }
