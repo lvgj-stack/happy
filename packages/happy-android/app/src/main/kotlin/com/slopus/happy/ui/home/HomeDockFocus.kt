@@ -315,7 +315,8 @@ private fun EnvironmentRows(
     val rows = buildList {
         add(Triple(NewSessionPage.Machine, Ionicon.DesktopOutline, options.machine?.name ?: stringResource(R.string.home_dock_select_machine)))
         if (botOnly) return@buildList
-        add(Triple(NewSessionPage.Project, Ionicon.FolderOutline, options.project?.name ?: "~"))
+        // The folder alone: a picked git worktree has its own row below.
+        add(Triple(NewSessionPage.Project, Ionicon.FolderOutline, options.projectTitle ?: "~"))
         val worktreeFallback = stringResource(if (options.picksWorkspaces) R.string.home_dock_main else R.string.home_dock_no_worktree)
         add(Triple(NewSessionPage.Worktree, Ionicon.GitBranchOutline, options.worktree?.name ?: worktreeFallback))
         add(
@@ -433,6 +434,8 @@ private fun PickerPanel(
                     selected = !option.action && option.key == selectedKey,
                     disabled = option.disabled,
                     action = option.action,
+                    // A git worktree under its repo's row.
+                    labelIcon = if (option.depth > 0) Ionicon.GitBranchOutline else null,
                     onClick = {
                         actions.onSelect(page, option.key)
                         onClose()

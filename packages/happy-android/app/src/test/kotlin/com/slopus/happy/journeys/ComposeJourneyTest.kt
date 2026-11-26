@@ -5,6 +5,9 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.isEnabled
@@ -143,6 +146,37 @@ class ComposeJourneyTest {
             rule.node(ComposeChatTags.option(NewSessionPage.Machine, machine)).performClick()
             rule.waitUntil(5_000) { newSession.draft.value.selectedMachineId == machine && newSession.draft.value.selectedPath == path }
         }
+    }
+
+    /** A git worktree hangs under its repo in the folder menu; one tap picks both, and the row says which. */
+    @Test
+    fun aWorktreeIsPickedFromUnderItsRepoInOneTap() {
+        journey.machine()
+        journey.session("s0", updatedAt = 200, path = "/h/repo", title = "Main chat")
+        journey.session("s1", updatedAt = 100, path = "/h/repo/.dev/worktree/calm", title = "Worktree chat")
+        val graph = journey.graph()
+        journey.signIn(graph)
+        val newSession = HomeServices.of(graph).newSession(ApplicationProvider.getApplicationContext())
+        rule.setContent { HappyApp(graph) }
+        rule.waitFor(FlatRowTags.ROW)
+        rule.node(HomeTags.COMPOSE).performClick()
+        rule.waitFor(NewWorkTags.FOLDER)
+        rule.waitUntil(5_000) { newSession.options.value?.machinesSynced == true }
+        rule.waitUntil(5_000) { newSession.draft.value.selectedPath == "/h/repo" }
+        rule.node(NewWorkTags.FOLDER).assertContentDescriptionEquals("Project: ~/repo")
+        rule.node(NewWorkTags.FOLDER).performClick()
+        rule.waitFor(ComposeChatTags.FOLDER_MENU)
+        rule.node(ComposeChatTags.option(NewSessionPage.Project, "/h/repo")).assert(hasAnyDescendant(hasText("repo"))).assertIsSelected()
+        rule.node(ComposeChatTags.option(NewSessionPage.Project, "/h/repo/.dev/worktree/calm")).assert(hasAnyDescendant(hasText("calm"))).performClick()
+        rule.waitUntil(5_000) { newSession.draft.value.worktreeKey == "/h/repo/.dev/worktree/calm" }
+        assertEquals("/h/repo", newSession.draft.value.selectedPath)
+        rule.waitUntil(5_000) { newSession.options.value?.placeTitle == "~/repo › calm" }
+        rule.node(NewWorkTags.FOLDER).assertContentDescriptionEquals("Project: ~/repo › calm")
+        // The worktree is the one ticked when the menu opens again.
+        rule.node(NewWorkTags.FOLDER).performClick()
+        rule.waitFor(ComposeChatTags.FOLDER_MENU)
+        rule.node(ComposeChatTags.option(NewSessionPage.Project, "/h/repo/.dev/worktree/calm")).assertIsSelected()
+        rule.node(ComposeChatTags.option(NewSessionPage.Project, "/h/repo")).assertIsNotSelected()
     }
 
     /**

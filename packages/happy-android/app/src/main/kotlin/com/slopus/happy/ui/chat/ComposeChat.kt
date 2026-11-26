@@ -77,6 +77,7 @@ import com.slopus.happy.ui.components.HappyAlert
 import com.slopus.happy.ui.components.HappyDropdownMenu
 import com.slopus.happy.ui.components.HappyMenuItem
 import com.slopus.happy.ui.components.HappyMenuSection
+import com.slopus.happy.ui.components.Icon
 import com.slopus.happy.ui.components.Ionicon
 import com.slopus.happy.ui.components.StateArt
 import com.slopus.happy.ui.components.Prompt
@@ -474,7 +475,7 @@ fun ComposeTarget(compose: ComposeChat, onReturn: () -> Unit = {}) {
         add(machineRow)
         when (shown) {
             ComposeKind.Session -> {
-                val folder = current?.project?.name ?: "~"
+                val folder = current?.placeTitle ?: "~"
                 add {
                     NewWorkMenuRow(
                         Ionicon.FolderOutline, folder, enabled && current != null,
@@ -669,7 +670,7 @@ private fun FolderMenu(compose: ComposeChat, options: NewSessionOptions, close: 
     val ok = stringResource(R.string.common_ok)
     HappyMenuSection(stringResource(R.string.home_dock_picker_projects))
     for (option in options.projects) {
-        MenuOption(NewSessionPage.Project, option, option.key == options.project?.key) { page, key ->
+        MenuOption(NewSessionPage.Project, option, option.key == options.placeKey) { page, key ->
             close()
             newSession.select(page, key)
         }
@@ -759,10 +760,15 @@ private fun BotNameRow(compose: ComposeChat, name: String, enabled: Boolean, onR
 
 @Composable
 private fun MenuOption(page: NewSessionPage, option: PickerOption, selected: Boolean, onPick: (NewSessionPage, String) -> Unit) {
+    val colors = HappyTheme.colors
     HappyMenuItem(
         label = option.name,
         onClick = { onPick(page, option.key) },
         supporting = option.description,
+        // A git worktree sits under its repo's row, marked as a branch of it.
+        leading = if (option.depth > 0) {
+            { Icon(Ionicon.GitBranchOutline, 16.dp, colors.textSecondary, Modifier.padding(start = 16.dp * option.depth)) }
+        } else null,
         selected = selected,
         enabled = !option.disabled,
         modifier = Modifier.testTag(ComposeChatTags.option(page, option.key)),
