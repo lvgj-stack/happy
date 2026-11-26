@@ -10,6 +10,7 @@
     <string name="home_bot_archive_offline">Połącz się z maszyną bota, aby go zarchiwizować.</string>
     <string name="home_create_workspace">Utwórz przestrzeń roboczą</string>
     <string name="home_create_workspace_in">Utwórz przestrzeń roboczą w %1$s</string>
+    <string name="home_new_chat_in">Nowy czat w %1$s</string>
     <string name="machine_not_found">Nie znaleziono maszyny</string>
     <string name="machine_unknown">nieznana maszyna</string>
     <string name="machine_stop_daemon_confirm_title">Zatrzymać demona?</string>

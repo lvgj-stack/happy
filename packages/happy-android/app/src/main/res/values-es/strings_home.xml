@@ -10,6 +10,7 @@
     <string name="home_bot_archive_offline">Conéctate a la máquina del bot para archivarlo.</string>
     <string name="home_create_workspace">Crear espacio de trabajo</string>
     <string name="home_create_workspace_in">Crear espacio de trabajo en %1$s</string>
+    <string name="home_new_chat_in">Chat nuevo en %1$s</string>
     <string name="machine_not_found">Máquina no encontrada</string>
     <string name="machine_unknown">máquina desconocida</string>
     <string name="machine_stop_daemon_confirm_title">¿Detener el daemon?</string>

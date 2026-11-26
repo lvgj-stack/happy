@@ -52,6 +52,7 @@ import com.slopus.happy.model.WorkspaceOrigin
 import com.slopus.happy.model.WorktreeToggle
 import com.slopus.happy.model.activity
 import com.slopus.happy.model.compactCount
+import com.slopus.happy.model.newChatPlace
 import com.slopus.happy.model.projectGitChanges
 import com.slopus.happy.model.resolveFlatRowPresentation
 import com.slopus.happy.model.workspaceOrigin
@@ -75,6 +76,7 @@ object ProjectListTags {
     const val PROJECT = "projectList.project"
     const val PROJECT_ADD = "projectList.projectAdd"
     const val WORKTREE = "projectList.worktree"
+    const val WORKTREE_ADD = "projectList.worktreeAdd"
     const val TOGGLE = "projectList.toggle"
     const val CHAT = "projectList.chat"
     const val TREE_STEM = "projectList.treeStem"
@@ -455,6 +457,9 @@ private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boo
     LocalHomeRowObserver.current?.let { observe -> SideEffect { observe(worktree.id) } }
     val colors = HappyTheme.colors
     val flip = checkoutFlip(worktree.id, callbacks)
+    val name = worktree.workspaceName ?: worktree.projectName
+    // A git worktree's "+" starts a chat in it; a Happy Agent project's workspace has none.
+    val place = newChatPlace(worktree.session)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -482,7 +487,7 @@ private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boo
                 )
             }
         }
-        RowName(worktree.workspaceName ?: worktree.projectName, collapsed && worktree.working, ProjectListSpec.worktreeName)
+        RowName(name, collapsed && worktree.working, ProjectListSpec.worktreeName)
         Row(
             modifier = Modifier.padding(start = ProjectListSpec.trailingGap),
             horizontalArrangement = Arrangement.spacedBy(ProjectListSpec.trailingGap),
@@ -490,6 +495,17 @@ private fun WorktreeRow(worktree: ProjectWorktree, last: Boolean, collapsed: Boo
         ) {
             if (collapsed) AttentionDot(worktree.blocked, worktree.unread)
             ProjectGitChanges(worktree.session)
+            if (place != null) {
+                Box(
+                    modifier = Modifier
+                        .size(ProjectListSpec.addButtonWidth, ProjectListSpec.addButtonHeight)
+                        .testTag(ProjectListTags.WORKTREE_ADD)
+                        .clickable(role = Role.Button) { callbacks.onNewChatIn(place) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Ionicon.Add, size = 18.dp, color = colors.textSecondary, contentDescription = stringResource(R.string.home_new_chat_in, name))
+                }
+            }
             FoldChevron(collapsed)
         }
     }

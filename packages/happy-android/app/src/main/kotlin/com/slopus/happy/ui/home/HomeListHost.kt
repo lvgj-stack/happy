@@ -23,6 +23,7 @@ import com.slopus.happy.R
 import com.slopus.happy.ui.connect.EnterTerminalUrlPrompt
 import com.slopus.happy.ui.connect.rememberTerminalConnect
 import com.slopus.happy.model.Session
+import com.slopus.happy.model.NewChatPlace
 import com.slopus.happy.model.SessionListGrouping
 import com.slopus.happy.model.WorkspaceOrigin
 import com.slopus.happy.model.forkSource
@@ -109,6 +110,14 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
             navigation.onCompose()
         }
     }
+    // A git worktree's "+": an empty chat on that very folder, its first line still to write.
+    val onNewChatIn = remember(services, context, navigation) {
+        { place: NewChatPlace ->
+            services.newSession(context.applicationContext)
+                .prepareCheckout(place.machineId, place.path, services.machine(place.machineId)?.metadata?.homeDir)
+            navigation.onCompose()
+        }
+    }
     // SessionsList's requestReview(), once its list has sessions.
     val reviewable = asksForReview(state, phone = phone)
     val reviewStrings = ReviewStrings(
@@ -130,7 +139,7 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
     val createWorkspaceLabel = stringResource(R.string.home_create_workspace)
     val cancelLabel = stringResource(R.string.common_cancel)
 
-    val callbacks = remember(services, menus, navigation) {
+    val callbacks = remember(services, menus, navigation, onNewChatIn) {
         HomeListCallbacks(
             onOpen = onOpenSession,
             onMenu = menus::open,
@@ -157,6 +166,7 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
                     s.copy(collapsedMachines = if (folded[id] == true) folded - id else folded + (id to true))
                 }
             },
+            onNewChatIn = onNewChatIn,
         )
     }
     // Linking from the empty home approves the code with this account, as Settings' scan does (not

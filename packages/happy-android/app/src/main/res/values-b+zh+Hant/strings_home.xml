@@ -10,6 +10,7 @@
     <string name="home_bot_archive_offline">連線到機器人所在的裝置才能封存它。</string>
     <string name="home_create_workspace">建立工作區</string>
     <string name="home_create_workspace_in">在 %1$s 中建立工作區</string>
+    <string name="home_new_chat_in">在 %1$s 中新建對話</string>
     <string name="machine_not_found">找不到裝置</string>
     <string name="machine_unknown">未知裝置</string>
     <string name="machine_stop_daemon_confirm_title">停止常駐程式？</string>

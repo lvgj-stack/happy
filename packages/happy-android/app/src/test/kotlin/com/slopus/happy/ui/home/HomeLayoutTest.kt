@@ -38,6 +38,7 @@ import com.slopus.happy.data.HappyDatabase
 import com.slopus.happy.data.HappyStore
 import com.slopus.happy.data.SessionRecord
 import com.slopus.happy.model.HomeEmptyState
+import com.slopus.happy.model.NewChatPlace
 import com.slopus.happy.model.HomeModelFixtures.machine
 import com.slopus.happy.model.HomeModelFixtures.machineMetadata
 import com.slopus.happy.model.HomeModelFixtures.metadata
@@ -467,6 +468,34 @@ class HomeLayoutTest {
         rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT)[0].assert(hasRole(Role.Button) and hasText("Fix login"))
         rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT)[1].assert(hasRole(Role.Button) and hasText("Ship it"))
         rule.onNode(hasContentDescription("Create workspace in happy", substring = true) and hasRole(Role.Button)).assertExists()
+        // A Happy Agent project's workspace keeps its own way in: no new chat from its row.
+        rule.onAllNodes(hasContentDescription("New chat in", substring = true)).assertCountEquals(0)
+        rule.assertActionsLabelled()
+    }
+
+    /** A git worktree's "+" asks for a new chat in that worktree, on its computer; its repo's card still makes a new worktree. */
+    @Test
+    fun aGitWorktreeRowStartsANewChatInIt() {
+        val asked = mutableListOf<NewChatPlace>()
+        val sessions = listOf(
+            session("main", metadata = metadata(path = "/h/happy") { put("machineId", "m1") }, lastMessageSentAt = noon),
+            session("calm", metadata = metadata(path = "/h/happy/.dev/worktree/calm") { put("machineId", "m1") }, lastMessageSentAt = noon - 1),
+        )
+        val withNewChat = HomeListCallbacks(
+            onOpen = { opened += it }, onMenu = {}, onArchive = {}, onSetArchiveHidden = {}, onToggleProject = {},
+            onOpenMachine = {}, onCreateWorkspace = {}, onProjectMenu = { _, _ -> }, onNewChatIn = { asked += it },
+        )
+        val state = state(sessions, grouping = SessionListGrouping.Project)
+        rule.setHappyContent {
+            HomeScreen(state, ConnectionStatus.CONNECTED, SessionListGrouping.Project, withNewChat, actions, accounts = accounts)
+        }
+        rule.onNodeWithTag(ProjectListTags.WORKTREE).assert(hasText("calm"))
+        rule.onAllNodesWithTag(ProjectListTags.WORKTREE_ADD).assertCountEquals(1)
+        rule.onNode(hasContentDescription("New chat in calm") and hasRole(Role.Button)).performClick()
+        assertEquals(listOf(NewChatPlace("m1", "/h/happy/.dev/worktree/calm")), asked)
+        // The tap is the "+"'s alone: the worktree neither folds nor opens a chat.
+        assertTrue(opened.isEmpty())
+        rule.onAllNodesWithTag(ProjectListTags.CHECKOUT_CHAT).assertCountEquals(2)
         rule.assertActionsLabelled()
     }
 

@@ -10,6 +10,7 @@
     <string name="home_bot_archive_offline">Подключитесь к машине бота, чтобы архивировать его.</string>
     <string name="home_create_workspace">Создать рабочее пространство</string>
     <string name="home_create_workspace_in">Создать рабочее пространство в %1$s</string>
+    <string name="home_new_chat_in">Новый чат в %1$s</string>
     <string name="machine_not_found">Машина не найдена</string>
     <string name="machine_unknown">неизвестная машина</string>
     <string name="machine_stop_daemon_confirm_title">Остановить демон?</string>

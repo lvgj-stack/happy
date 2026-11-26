@@ -7,6 +7,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import com.slopus.happy.model.NewChatPlace
 import com.slopus.happy.model.WorkspaceOrigin
 
 /**
@@ -32,6 +33,8 @@ class HomeListCallbacks(
     val onToggleCheckout: (checkoutId: String) -> Unit = {},
     /** Grouped by project: fold a computer's bots, tasks and projects away under its heading, or list them again. */
     val onToggleMachine: (foldId: String) -> Unit = {},
+    /** A git worktree's "+": a new chat in that folder, on its computer. */
+    val onNewChatIn: (NewChatPlace) -> Unit = {},
 )
 
 /**

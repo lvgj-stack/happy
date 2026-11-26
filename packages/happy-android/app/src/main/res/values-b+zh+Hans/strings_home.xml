@@ -10,6 +10,7 @@
     <string name="home_bot_archive_offline">连接到机器人所在的设备才能归档它。</string>
     <string name="home_create_workspace">创建工作区</string>
     <string name="home_create_workspace_in">在 %1$s 中创建工作区</string>
+    <string name="home_new_chat_in">在 %1$s 中新建会话</string>
     <string name="machine_not_found">未找到设备</string>
     <string name="machine_unknown">未知设备</string>
     <string name="machine_stop_daemon_confirm_title">停止守护进程？</string>

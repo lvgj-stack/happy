@@ -163,6 +163,28 @@ fun workspaceOrigin(session: SessionRowData): WorkspaceOrigin? {
     return WorkspaceOrigin(machineId, null, if (WorktreePaths.isWorktree(path)) WorktreePaths.repoPath(path) else path)
 }
 
+/** A folder a new chat can start in as it is: a git checkout or worktree on its computer. */
+data class NewChatPlace(val machineId: String, val path: String)
+
+/**
+ * Where "new chat here" starts, or null where it can't: bots and tasks keep
+ * one conversation each, a Happy Agent project ([projectId]) makes its own
+ * workspaces, and a chat with no computer or folder has nowhere to start.
+ */
+fun newChatPlace(machineId: String?, projectId: String?, path: String?, botOrTask: Boolean = false): NewChatPlace? {
+    if (botOrTask || projectId != null) return null
+    val machine = machineId?.takeIf { it.isNotEmpty() } ?: return null
+    val folder = path?.trim().orEmpty()
+    if (folder.isEmpty()) return null
+    return NewChatPlace(machine, folder)
+}
+
+fun newChatPlace(session: SessionRowData): NewChatPlace? =
+    newChatPlace(session.machineId, session.projectId, session.path, botOrTask = session.botId != null || session.task)
+
+fun Session.newChatPlace(): NewChatPlace? =
+    newChatPlace(metadata?.machineId, projectIdOrNull(), metadata?.path, botOrTask = metadata?.bot != null || isTask)
+
 internal data class Activity(val unread: Boolean, val working: Boolean, val blocked: Boolean)
 
 internal fun activity(sessions: List<SessionRowData>) = Activity(

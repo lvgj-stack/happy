@@ -518,6 +518,20 @@ class ProjectHomeRowsTest {
         assertNull(workspaceOrigin(row("a", path = "   ")))
     }
 
+    @Test fun newChatPlaceSkipsBotsTasksAndHappyAgentProjects() {
+        assertEquals(NewChatPlace("m1", "/h/repo/.dev/worktree/calm"), newChatPlace("m1", null, " /h/repo/.dev/worktree/calm "))
+        assertNull(newChatPlace("m1", "p1", "/h/repo"))
+        assertNull(newChatPlace(null, null, "/h/repo"))
+        assertNull(newChatPlace("m1", null, " "))
+        assertNull(newChatPlace("m1", null, null))
+        assertNull(newChatPlace("m1", null, "/h/repo", botOrTask = true))
+        // A row's: its own machine and folder, none for a Happy Agent project's, a bot's or a task's.
+        assertEquals(NewChatPlace("machine-a", "/repo/.dev/worktree/gdansk"), newChatPlace(row("a", path = "/repo/.dev/worktree/gdansk")))
+        assertNull(newChatPlace(row("a", projectId = "project-1", path = "/repo")))
+        assertNull(newChatPlace(row("a", path = "/repo").copy(botId = "bot-1")))
+        assertNull(newChatPlace(row("a", path = "/repo").copy(task = true)))
+    }
+
     @Test fun compactCountsLikeHappyDesktop() {
         assertEquals("999", compactCount(999))
         assertEquals("1k", compactCount(1_000))
