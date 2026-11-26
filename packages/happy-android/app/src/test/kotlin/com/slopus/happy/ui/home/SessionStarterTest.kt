@@ -355,6 +355,15 @@ class SessionStarterTest {
         assertTrue(failed.machines.spawns.isEmpty())
     }
 
+    @Test fun aCheckoutFromHomeSpawnsAtItsAbsolutePath() = runTest {
+        val h = harness(
+            draft = NewSessionDraft(selectedMachineId = "m1", selectedPath = "~/code", sessionType = SessionType.Worktree, worktreeKey = "~/code/.dev/worktree/calm"),
+        )
+        assertEquals(StartResult.Started("s1"), h.starter.start(confirmDirectory = yes))
+        assertTrue(h.machines.worktrees.isEmpty())
+        assertEquals("/Users/dev/code/.dev/worktree/calm", h.machines.spawns.single().directory)
+    }
+
     @Test fun happyAgentStartsInItsProjectByIdentity() = runTest {
         val h = harness(
             listOf(rig),

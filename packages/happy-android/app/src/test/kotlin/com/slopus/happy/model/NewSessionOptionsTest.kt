@@ -203,6 +203,39 @@ class NewSessionOptionsTest {
         assertEquals(next, resolve(next, listOf(studio)).reconcile(next, listOf(studio), overrides))
     }
 
+    @Test fun leavingAPickedCheckoutNeverAsksForANewWorktree() {
+        val onCheckout = NewSessionDraft(selectedMachineId = "m1", selectedPath = "/Users/dev/code/happy", sessionType = SessionType.Worktree, worktreeKey = "/Users/dev/code/happy/.dev/worktree/calm")
+        assertEquals(SessionType.Simple to null, onCheckout.withMachine("m2").let { it.sessionType to it.worktreeKey })
+        assertEquals(SessionType.Simple to null, onCheckout.withProject("p1").let { it.sessionType to it.worktreeKey })
+        // A new worktree asked for (the project card's +) stays asked for on another computer.
+        val asked = NewSessionDraft(selectedMachineId = "m1", selectedPath = "/a").selectingWorktree(WorktreeSelection.NEW)
+        assertEquals(SessionType.Worktree, asked.withMachine("m2").sessionType)
+    }
+
+    @Test fun aCheckoutTypedFromHomeIsResolvedOnceTheComputerIsKnown() {
+        val typed = NewSessionDraft(selectedMachineId = "m1").selectingPath("~/code/happy/.dev/worktree/calm")
+        assertEquals("~/code/happy/.dev/worktree/calm", typed.worktreeKey)
+        val next = resolve(typed, listOf(studio)).reconcile(typed, listOf(studio), overrides)
+        assertEquals("/Users/dev/code/happy/.dev/worktree/calm", next.worktreeKey)
+        assertEquals(next, resolve(next, listOf(studio)).reconcile(next, listOf(studio), overrides))
+    }
+
+    @Test fun aWorktreeOfAHappyAgentProjectStaysAFolder() {
+        val sessions = listOf(
+            session("b", rigMetadata(path = "/Users/dev/app", machineId = "r1", projectId = "p1", projectName = "App")),
+            cli("a", "/Users/dev/app/.dev/worktree/a"),
+        )
+        val draft = NewSessionDraft(selectedMachineId = "m1")
+        val options = resolve(draft, listOf(studio, rig), sessions)
+        assertEquals("one row for the project's folder", 1, options.projects.count { it.key == "/Users/dev/app" })
+        val row = options.projects.single { it.key == "/Users/dev/app/.dev/worktree/a" }
+        assertEquals(0, row.depth)
+        assertTrue(options.keepsAsFolder(row.key))
+        val picked = draft.withPath(row.key)
+        val next = resolve(picked, listOf(studio, rig), sessions).reconcile(picked, listOf(studio, rig), overrides)
+        assertEquals(Triple(row.key, SessionType.Simple, null), Triple(next.selectedPath, next.sessionType, next.worktreeKey))
+    }
+
     @Test fun aWorktreeStaysTheFolderWhereNoWorktreeCanBeMade() {
         // This Happy Agent makes no worktrees: a picked checkout starts as a plain folder, not dropped for its repo.
         val machines = listOf(studio, rigMachine(worktrees = false))

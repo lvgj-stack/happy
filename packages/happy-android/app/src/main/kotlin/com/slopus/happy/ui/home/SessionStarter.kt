@@ -261,7 +261,7 @@ class SessionStarter(
         val supportsWorktrees = rigCreation?.supportsWorktrees ?: (agent != AgentType.OpenClaw)
         val worktreeMachine = if (target != null) null else resolveWorktreeCreationMachine(choice, agent, supportsWorktrees)
         val worktree = if (target == null && worktreeMachine == null && requestedWorktree == WorktreeSelection.NEW) WorktreeSelection.NONE else requestedWorktree
-        val spawnDirectory = if (worktree != WorktreeSelection.NONE && worktree != WorktreeSelection.NEW && target == null) worktree else directory
+        val spawnDirectory = if (worktree != WorktreeSelection.NONE && worktree != WorktreeSelection.NEW && target == null) resolveAbsolutePath(worktree, machine.metadata?.homeDir) else directory
 
         var modes: Map<AgentModeField, String?>? = null
         val options = if (rigCreation != null) {

@@ -38,11 +38,18 @@ data class NewSessionDraft(
     val updatedAt: Long = 0,
 ) {
     /** setMachineId: another computer's folders mean nothing here. */
-    fun withMachine(id: String?) = copy(selectedMachineId = id, selectedPath = null, selectedProjectId = null, worktreeKey = null)
+    fun withMachine(id: String?) = copy(selectedMachineId = id, selectedPath = null, selectedProjectId = null, worktreeKey = null, sessionType = placeLeftType)
 
-    fun withPath(path: String?) = copy(selectedPath = path, selectedProjectId = null, worktreeKey = null)
+    fun withPath(path: String?) = copy(selectedPath = path, selectedProjectId = null, worktreeKey = null, sessionType = placeLeftType)
 
-    fun withProject(id: String?) = copy(selectedProjectId = id, selectedPath = null, worktreeKey = null)
+    fun withProject(id: String?) = copy(selectedProjectId = id, selectedPath = null, worktreeKey = null, sessionType = placeLeftType)
+
+    /**
+     * What a checkout pick becomes once its place is left: a checkout already
+     * made belonged there and goes with it (never a new worktree in its
+     * stead); a new one asked for stays asked for.
+     */
+    private val placeLeftType: SessionType get() = if (worktreeKey != null) SessionType.Simple else sessionType
 
     fun pickAgent(agent: AgentType) = copy(agentType = agent, pickedAgentType = agent)
 

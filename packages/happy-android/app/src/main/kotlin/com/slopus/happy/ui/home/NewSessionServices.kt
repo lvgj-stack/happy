@@ -213,7 +213,7 @@ class NewSessionServices(
         drafts.change { draft ->
             when (page) {
                 NewSessionPage.Machine -> draft.withMachine(key)
-                NewSessionPage.Project -> draft.selectingProject(key, machines, overrides)
+                NewSessionPage.Project -> if (options.value?.keepsAsFolder(key) == true) draft.withPath(key) else draft.selectingProject(key, machines, overrides)
                 NewSessionPage.Worktree -> draft.selectingWorktree(key)
                 NewSessionPage.Agent -> AgentType.fromWire(key)?.let { draft.selectingAgent(it, picked = true, machines, overrides) } ?: draft
                 NewSessionPage.Model -> draft.copy(modelMode = key)
@@ -224,7 +224,7 @@ class NewSessionServices(
     }
 
     /** A custom directory typed in by hand. */
-    fun selectPath(path: String) = drafts.change { it.selectingPath(path) }
+    fun selectPath(path: String) = drafts.change { if (options.value?.keepsAsFolder(path) == true) it.withPath(path) else it.selectingPath(path) }
 
     /**
      * LegacyComposeStart's followMachine: a computer with no folder picked
