@@ -38,12 +38,13 @@ class NewSessionOptionsTest {
         active = false,
         activeAt = 3,
     )
-    private val rig = machine(
+    private val rig = rigMachine(worktrees = true)
+    private fun rigMachine(worktrees: Boolean) = machine(
         "r1",
         machineMetadata {
             put("machineKind", "rig")
             put("siblingMachineId", "m1")
-            putJsonObject("capabilities") { put("newSession", true); put("worktrees", true) }
+            putJsonObject("capabilities") { put("newSession", true); put("worktrees", worktrees) }
             putJsonObject("defaults") { put("providerId", "openai"); put("modelId", "gpt"); put("permissionMode", "auto") }
             putJsonArray("models") {
                 addJsonObject {
@@ -117,10 +118,108 @@ class NewSessionOptionsTest {
         val options = resolve(NewSessionDraft(selectedMachineId = "m1"), listOf(studio, rig), sessions)
         val byKey = options.projects.associateBy { it.key }
         assertEquals("~", byKey.getValue("~").name)
-        assertEquals("~/code", byKey.getValue("/Users/dev/code").name)
+        assertEquals("code" to "~/code", byKey.getValue("/Users/dev/code").let { it.name to it.description })
         assertEquals("App", byKey.getValue("/Users/dev/app").name)
         assertEquals("~/app", byKey.getValue("/Users/dev/app").description)
         assertEquals("~", options.project?.key)
+    }
+
+    private fun cli(id: String, path: String) = session(id, metadata(path = path) { put("machineId", "m1") })
+
+    @Test fun worktreesHangUnderTheirRepo() {
+        val sessions = listOf(
+            cli("a", "/Users/dev/code/happy/.dev/worktree/calm"),
+            cli("b", "/Users/dev/other"),
+            cli("c", "/Users/dev/code/happy"),
+            cli("d", "/Users/dev/code/happy/.dev/worktree/bold"),
+        )
+        val options = resolve(NewSessionDraft(selectedMachineId = "m1"), listOf(studio), sessions)
+        // Groups keep the order of their first appearance; the repo leads its worktrees.
+        assertEquals(
+            listOf("~", "/Users/dev/code/happy", "/Users/dev/code/happy/.dev/worktree/calm", "/Users/dev/code/happy/.dev/worktree/bold", "/Users/dev/other"),
+            options.projects.map { it.key },
+        )
+        val byKey = options.projects.associateBy { it.key }
+        assertEquals("happy" to "~/code/happy", byKey.getValue("/Users/dev/code/happy").let { it.name to it.description })
+        assertEquals(0, byKey.getValue("/Users/dev/code/happy").depth)
+        assertEquals("calm", byKey.getValue("/Users/dev/code/happy/.dev/worktree/calm").name)
+        assertEquals(1, byKey.getValue("/Users/dev/code/happy/.dev/worktree/calm").depth)
+        assertEquals("~/code/happy/.dev/worktree/calm", byKey.getValue("/Users/dev/code/happy/.dev/worktree/calm").description)
+        // "~" is named "~" and says nothing twice.
+        assertNull(byKey.getValue("~").description)
+    }
+
+    @Test fun aWorktreeWhoseRepoWasNeverUsedGetsARepoRow() {
+        val options = resolve(NewSessionDraft(selectedMachineId = "m1"), listOf(studio), listOf(cli("a", "/Users/dev/web/.dev/worktree/sharp")))
+        val keys = options.projects.map { it.key }
+        assertEquals(keys.indexOf("/Users/dev/web") + 1, keys.indexOf("/Users/dev/web/.dev/worktree/sharp"))
+        assertEquals("web" to 0, options.projects.first { it.key == "/Users/dev/web" }.let { it.name to it.depth })
+    }
+
+    @Test fun aFolderInsideAWorktreeKeepsItsSubpath() {
+        val path = "/Users/dev/code/happy/.dev/worktree/cursor-x/packages/happy-cli"
+        val options = resolve(NewSessionDraft(selectedMachineId = "m1"), listOf(studio), listOf(cli("a", path)))
+        assertEquals("cursor-x › packages/happy-cli", options.projects.first { it.key == path }.name)
+        val picked = NewSessionDraft(selectedMachineId = "m1").selectingProject(path, listOf(studio), overrides)
+        assertEquals(Triple("/Users/dev/code/happy", SessionType.Worktree, path), Triple(picked.selectedPath, picked.sessionType, picked.worktreeKey))
+    }
+
+    @Test fun aWorktreeRowPicksRepoAndWorktreeAtOnce() {
+        val sessions = listOf(cli("c", "/Users/dev/code/happy"), cli("a", "/Users/dev/code/happy/.dev/worktree/calm"))
+        val draft = NewSessionDraft(selectedMachineId = "m1").selectingProject("/Users/dev/code/happy/.dev/worktree/calm", listOf(studio), overrides)
+        assertEquals(Triple("/Users/dev/code/happy", SessionType.Worktree, "/Users/dev/code/happy/.dev/worktree/calm"), Triple(draft.selectedPath, draft.sessionType, draft.worktreeKey))
+        val options = resolve(draft, listOf(studio), sessions)
+        assertEquals("/Users/dev/code/happy/.dev/worktree/calm", options.placeKey)
+        assertEquals("~/code/happy › calm", options.placeTitle)
+        assertEquals("~/code/happy", options.projectTitle)
+        // The repo row is ticked, and titled, by its path.
+        val onRepo = resolve(draft.selectingProject("/Users/dev/code/happy", listOf(studio), overrides), listOf(studio), sessions)
+        assertEquals("/Users/dev/code/happy" to "~/code/happy", onRepo.placeKey to onRepo.placeTitle)
+    }
+
+    @Test fun aCheckoutPreparedFromHomeTicksItsWorktreeRow() {
+        // prepareCheckout writes the repo relative to home and the worktree in full: still one group.
+        val sessions = listOf(cli("c", "/Users/dev/code/happy"), cli("a", "/Users/dev/code/happy/.dev/worktree/calm"))
+        val draft = NewSessionDraft(selectedMachineId = "m1", selectedPath = "~/code/happy", sessionType = SessionType.Worktree, worktreeKey = "/Users/dev/code/happy/.dev/worktree/calm")
+        val options = resolve(draft, listOf(studio), sessions)
+        assertEquals(listOf("~/code/happy", "/Users/dev/code/happy/.dev/worktree/calm"), options.projects.map { it.key })
+        assertEquals("/Users/dev/code/happy/.dev/worktree/calm", options.placeKey)
+        assertEquals("~/code/happy › calm", options.placeTitle)
+    }
+
+    @Test fun aRepoRowAfterAWorktreeIsTheMainCheckout() {
+        val onWorktree = NewSessionDraft(selectedMachineId = "m1", selectedPath = "/Users/dev/code/happy", sessionType = SessionType.Worktree, worktreeKey = "/Users/dev/code/happy/.dev/worktree/calm")
+        val back = onWorktree.selectingProject("/Users/dev/code/happy", listOf(studio), overrides)
+        assertEquals(SessionType.Simple to null, back.sessionType to back.worktreeKey)
+        // A new worktree asked for (the project card's +) stays asked for across a folder change.
+        val asked = NewSessionDraft(selectedMachineId = "m1", selectedPath = "/a").selectingWorktree(WorktreeSelection.NEW)
+        assertEquals(SessionType.Worktree, asked.selectingProject("/b", listOf(studio), overrides).sessionType)
+    }
+
+    @Test fun aDraftOnAWorktreePathBecomesRepoAndWorktree() {
+        val draft = NewSessionDraft(selectedMachineId = "m1", selectedPath = "~/code/happy/.dev/worktree/calm")
+        val next = resolve(draft, listOf(studio)).reconcile(draft, listOf(studio), overrides)
+        assertEquals(Triple("~/code/happy", SessionType.Worktree, "/Users/dev/code/happy/.dev/worktree/calm"), Triple(next.selectedPath, next.sessionType, next.worktreeKey))
+        assertEquals(next, resolve(next, listOf(studio)).reconcile(next, listOf(studio), overrides))
+    }
+
+    @Test fun aWorktreeStaysTheFolderWhereNoWorktreeCanBeMade() {
+        // This Happy Agent makes no worktrees: a picked checkout starts as a plain folder, not dropped for its repo.
+        val machines = listOf(studio, rigMachine(worktrees = false))
+        val draft = NewSessionDraft(selectedMachineId = "m1")
+            .selectingAgent(AgentType.Rig, picked = true, machines, overrides)
+            .selectingProject("/Users/dev/code/happy/.dev/worktree/calm", machines, overrides)
+        val next = resolve(draft, machines).reconcile(draft, machines, overrides)
+        assertEquals(AgentType.Rig, next.agentType)
+        assertEquals(Triple("/Users/dev/code/happy/.dev/worktree/calm", SessionType.Simple, null), Triple(next.selectedPath, next.sessionType, next.worktreeKey))
+        assertEquals(next, resolve(next, machines).reconcile(next, machines, overrides))
+    }
+
+    @Test fun aTypedWorktreePathIsAWorktreePick() {
+        val typed = NewSessionDraft(selectedMachineId = "m1").selectingPath("/Users/dev/code/happy/.dev/worktree/calm")
+        assertEquals(Triple("/Users/dev/code/happy", SessionType.Worktree, "/Users/dev/code/happy/.dev/worktree/calm"), Triple(typed.selectedPath, typed.sessionType, typed.worktreeKey))
+        assertEquals("cursor-x › packages/cli", WorktreePaths.label("/r/.dev/worktree/cursor-x/packages/cli"))
+        assertNull(WorktreePaths.label("/r"))
     }
 
     @Test fun aCatalogOnlyProjectNeedsHappyAgent() {

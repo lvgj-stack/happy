@@ -19,6 +19,8 @@ data class PickerOption(
     val description: String? = null,
     val disabled: Boolean = false,
     val action: Boolean = false,
+    /** 0 for a row of its own; 1 for a git worktree drawn under its repo's row. */
+    val depth: Int = 0,
 )
 
 /** One group of a picker: a heading (a model's provider, say), then its rows. */
@@ -111,8 +113,19 @@ fun NewSessionDraft.selectingAgent(
 
 /** A project row: its folder, or (a catalog-only project) Happy Agent with the project's identity. */
 fun NewSessionDraft.selectingProject(key: String, machines: List<Machine>, overrides: AgentDefaultOverrides?): NewSessionDraft {
-    val projectId = readProjectPlaceKey(key) ?: return withPath(key)
+    val projectId = readProjectPlaceKey(key) ?: return selectingPath(key)
     return withProject(projectId).selectingAgent(AgentType.Rig, picked = true, machines, overrides)
+}
+
+/**
+ * A folder, picked or typed. A git worktree is its repo with that checkout
+ * chosen; a repo after a picked checkout is the repo's own checkout, while a
+ * new worktree asked for stays asked for.
+ */
+fun NewSessionDraft.selectingPath(path: String): NewSessionDraft = when {
+    WorktreePaths.isWorktree(path) -> withPath(WorktreePaths.repoPath(path)).selectingWorktree(path)
+    worktreeKey != null -> withPath(path).selectingWorktree(WorktreeSelection.NONE)
+    else -> withPath(path)
 }
 
 /** A worktree row: none, a new one, or an existing checkout. */
@@ -164,7 +177,36 @@ data class NewSessionOptions(
     val offline: ComposeOffline? = null,
     /** The account's computers have been fetched; until then none listed means "not here yet". */
     val machinesSynced: Boolean = true,
+    /** The chosen computer's home directory, which `~` stands for. */
+    val homeDir: String? = null,
 ) {
+    /** The draft's checkout of its folder, when it is one already made (not none, not a new one). */
+    private val pickedCheckout: String?
+        get() = worktreeSelection.takeUnless { picksWorkspaces || it == WorktreeSelection.NONE || it == WorktreeSelection.NEW }
+
+    /** The folder row drawn as chosen: the picked checkout's row under its repo, else the folder's own. */
+    val placeKey: String?
+        get() = pickedCheckout?.let { checkout ->
+            val wanted = resolveAbsolutePath(checkout, homeDir)
+            projects.find { it.depth > 0 && resolveAbsolutePath(it.key, homeDir) == wanted }?.key
+        } ?: project?.key
+
+    /** The folder alone: a path relative to home, or a Happy Agent project's name. */
+    val projectTitle: String?
+        get() {
+            val row = project ?: return null
+            return if (picksWorkspaces || readProjectPlaceKey(row.key) != null) row.name else formatPathRelativeToHome(row.key, homeDir)
+        }
+
+    /** The folder and, when one is picked, the checkout in it: `~/code/happy › calm`. */
+    val placeTitle: String?
+        get() {
+            val folder = projectTitle
+            val checkout = pickedCheckout ?: return folder
+            val name = WorktreePaths.label(checkout) ?: worktree?.name ?: checkout
+            return if (folder == null) name else "$folder › $name"
+        }
+
     /** Some computer's Happy Agent makes bots. */
     val offersBots: Boolean get() = targets.any { it.makesBots }
 
@@ -208,8 +250,14 @@ data class NewSessionOptions(
         var next = draft
         if (resolvedMachineId != next.selectedMachineId) next = next.copy(selectedMachineId = resolvedMachineId)
         if (resolvedAgent != next.agentType) next = next.selectingAgent(resolvedAgent, picked = false, machines, overrides)
+        val path = next.selectedPath
+        if (supportsWorktree && !picksWorkspaces && next.selectedProjectId == null && path != null && WorktreePaths.isWorktree(path)) {
+            // A folder in a git worktree (saved before worktrees hung under their repo) is its repo with that checkout.
+            next = next.copy(selectedPath = WorktreePaths.repoPath(path), sessionType = SessionType.Worktree, worktreeKey = resolveAbsolutePath(path, homeDir))
+        }
         if (!supportsWorktree && !picksWorkspaces && next.sessionType == SessionType.Worktree) {
-            next = next.copy(sessionType = SessionType.Simple, worktreeKey = null)
+            // A checkout already made is still a folder to start in; only a new one can't be made.
+            next = next.copy(selectedPath = next.worktreeKey ?: next.selectedPath, sessionType = SessionType.Simple, worktreeKey = null)
         }
         return next
     }
@@ -220,13 +268,54 @@ data class NewSessionOptions(
         NewSessionPage.Project -> listOf(
             PickerSection("projects", labels.projects, projects),
             PickerSection("custom", null, listOf(PickerOption(CUSTOM_PROJECT_PATH_KEY, labels.enterCustomPath, action = true))),
-        ) to project?.key
+        ) to placeKey
         NewSessionPage.Worktree -> listOf(PickerSection("worktree", titles(page), worktrees)) to worktreeSelection
         NewSessionPage.Agent -> listOf(PickerSection("agent", titles(page), agents)) to agent.key
         NewSessionPage.Model -> models.map { it.copy(title = it.title ?: titles(page)) } to model?.key
         NewSessionPage.Permission -> listOf(PickerSection("permission", titles(page), permissions)) to permission?.key
         NewSessionPage.Effort -> listOf(PickerSection("effort", titles(page), efforts)) to effort?.key
     }
+}
+
+/** A repo among the folder rows, and the git worktrees of it sessions worked in, in the order they were met. */
+private class FolderGroup(var key: String) {
+    var hasOwnRow = false
+    val worktrees = mutableListOf<SessionPlace>()
+}
+
+/**
+ * The places as the folder picker draws them: a Happy Agent project (or a
+ * catalog-only one) stays a row of its own; a plain folder joins its repo's
+ * group, which stands where the first of its folders was met, even when the
+ * repo itself was never worked in. `~/x` and `/home/x` are one folder.
+ */
+private fun groupFolders(places: List<SessionPlace>, homeDir: String?): List<Any> {
+    val slots = mutableListOf<Any>()
+    val groups = HashMap<String, FolderGroup>()
+    for (place in places) {
+        val path = place.path
+        if (path == null || place.projectId != null) {
+            slots += place
+            continue
+        }
+        val repo = WorktreePaths.repoPath(path)
+        val group = groups.getOrPut(resolveAbsolutePath(repo, homeDir)) { FolderGroup(repo).also { slots += it } }
+        if (!WorktreePaths.isWorktree(path)) {
+            // The repo's own place names its row, the first one met when `~/x` and `/home/x` both were.
+            if (!group.hasOwnRow) group.key = place.key
+            group.hasOwnRow = true
+        } else {
+            val absolute = resolveAbsolutePath(path, homeDir)
+            if (group.worktrees.none { resolveAbsolutePath(it.path!!, homeDir) == absolute }) group.worktrees += place
+        }
+    }
+    return slots
+}
+
+/** The last folder of a path; `~` and `/` name themselves. */
+private fun folderName(path: String): String {
+    val trimmed = path.trimEnd('/', '\\')
+    return trimmed.substring(trimmed.lastIndexOfAny(charArrayOf('/', '\\')) + 1).ifEmpty { path }
 }
 
 /**
@@ -264,15 +353,25 @@ fun resolveNewSessionOptions(
     val draftProjectPlace = draftProjectId?.let { id -> places.find { it.projectId == id } }
     val draftProjectPlaceKey = draftProjectId?.let { draftProjectPlace?.key ?: projectPlaceKey(it) }
     val projectOptions = buildList {
-        for (place in places) {
+        for (slot in groupFolders(places, homeDir)) {
+            if (slot is FolderGroup) {
+                val relative = formatPathRelativeToHome(slot.key, homeDir)
+                val name = folderName(relative)
+                add(PickerOption(slot.key, name, relative.takeUnless { it == name }))
+                for (worktree in slot.worktrees) {
+                    val path = worktree.path!!
+                    add(PickerOption(worktree.key, WorktreePaths.label(path) ?: worktree.name, formatPathRelativeToHome(path, homeDir), depth = 1))
+                }
+                continue
+            }
+            val place = slot as SessionPlace
             if (place.path == null) {
                 // Only Happy Agent can open a project the catalog alone has the folder for.
                 if (rigSelection != null) add(PickerOption(place.key, place.name))
                 continue
             }
             val relative = formatPathRelativeToHome(place.path, homeDir)
-            val name = if (place.projectId != null) place.name else relative
-            add(PickerOption(place.key, name, relative.takeUnless { name == place.path }))
+            add(PickerOption(place.key, place.name, relative.takeUnless { place.name == place.path }))
         }
         // The draft's own project keeps its row after its last chat is archived.
         if (draftProjectId != null && draftProjectPlace == null) {
@@ -400,5 +499,6 @@ fun resolveNewSessionOptions(
         currentTarget = choice?.let { picked -> targets.find { it.id == picked.id } },
         offline = offline,
         machinesSynced = machinesSynced,
+        homeDir = homeDir,
     )
 }

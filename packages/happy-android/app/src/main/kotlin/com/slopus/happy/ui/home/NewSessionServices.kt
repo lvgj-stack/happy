@@ -20,6 +20,7 @@ import com.slopus.happy.model.findMachineChoice
 import com.slopus.happy.model.formatPathRelativeToHome
 import com.slopus.happy.model.resolveNewSessionOptions
 import com.slopus.happy.model.selectingAgent
+import com.slopus.happy.model.selectingPath
 import com.slopus.happy.model.selectingProject
 import com.slopus.happy.model.selectingWorktree
 import kotlinx.coroutines.CoroutineDispatcher
@@ -223,7 +224,7 @@ class NewSessionServices(
     }
 
     /** A custom directory typed in by hand. */
-    fun selectPath(path: String) = drafts.change { it.withPath(path) }
+    fun selectPath(path: String) = drafts.change { it.selectingPath(path) }
 
     /**
      * LegacyComposeStart's followMachine: a computer with no folder picked

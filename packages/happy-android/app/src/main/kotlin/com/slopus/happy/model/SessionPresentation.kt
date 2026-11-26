@@ -108,6 +108,13 @@ object WorktreePaths {
         val index = path.indexOf(MARKER)
         return if (index == -1) null else path.substring(index + MARKER.length)
     }
+
+    /** The worktree's name, and the folder inside it after a `›`: `cursor-x › packages/happy-cli`. */
+    fun label(path: String): String? {
+        val name = worktreeName(path)?.trimEnd('/') ?: return null
+        val slash = name.indexOf('/')
+        return if (slash == -1) name else name.substring(0, slash) + " › " + name.substring(slash + 1)
+    }
 }
 
 /** sessionFork.ts `getSessionForkSource` */
