@@ -11,6 +11,7 @@
     <string name="home_create_workspace">Criar espaço de trabalho</string>
     <string name="home_create_workspace_in">Criar espaço de trabalho em %1$s</string>
     <string name="home_new_chat_in">Novo chat em %1$s</string>
+    <string name="session_new_chat_here">Novo chat aqui</string>
     <string name="machine_not_found">Máquina não encontrada</string>
     <string name="machine_unknown">máquina desconhecida</string>
     <string name="machine_stop_daemon_confirm_title">Parar o daemon?</string>

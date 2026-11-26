@@ -11,9 +11,11 @@ import androidx.compose.ui.res.stringResource
 import com.slopus.happy.R
 import com.slopus.happy.chat.prettyJson
 import com.slopus.happy.diagnostics.ClientLogs
+import com.slopus.happy.model.NewChatPlace
 import com.slopus.happy.model.Session
 import com.slopus.happy.model.forkSource
 import com.slopus.happy.model.isTask
+import com.slopus.happy.model.newChatPlace
 import com.slopus.happy.resume.ResumeOutcome
 import com.slopus.happy.resume.ResumeTexts
 import com.slopus.happy.resume.rememberResumeTexts
@@ -82,12 +84,15 @@ internal fun rememberSessionMenus(
     onDuplicate: (Session) -> Unit,
     showAlert: (Alert) -> Unit,
     onBeforeArchive: (sessionId: String) -> Unit = {},
+    /** "New chat here": an empty chat in the session's folder or worktree. Null leaves the row out. */
+    onNewChatHere: ((NewChatPlace) -> Unit)? = null,
 ): SessionMenus {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val strings = SessionMenuStrings(
         title = stringResource(R.string.session_actions_title),
         details = stringResource(R.string.profile_details),
+        newChatHere = stringResource(R.string.session_new_chat_here),
         resume = stringResource(R.string.session_info_resume_session),
         fork = stringResource(R.string.session_fork_action),
         duplicate = stringResource(R.string.session_duplicate_action),
@@ -117,7 +122,7 @@ internal fun rememberSessionMenus(
         success = stringResource(R.string.common_success),
         resumeTexts = rememberResumeTexts(),
     )
-    return remember(services, continuationExperiments, devMode, onOpenSession, onDetails, onDuplicate, strings, context, scope, showAlert, onBeforeArchive) {
+    return remember(services, continuationExperiments, devMode, onOpenSession, onDetails, onDuplicate, strings, context, scope, showAlert, onBeforeArchive, onNewChatHere) {
         fun error(message: String) = showAlert(Alert(strings.error, message, listOf(AlertButton(strings.ok))))
 
         // copySessionMetadataToClipboard's answer either way.
@@ -139,6 +144,9 @@ internal fun rememberSessionMenus(
                 val buttons = ids.mapNotNull { id ->
                     when (id) {
                         SessionActionId.Details -> onDetails?.let { AlertButton(strings.details) { it(session.id) } }
+                        SessionActionId.NewChatHere -> onNewChatHere?.let { open ->
+                            session.newChatPlace()?.let { place -> AlertButton(strings.newChatHere) { open(place) } }
+                        }
                         SessionActionId.Resume -> AlertButton(strings.resume) {
                             val availability = resumeAvailability(session, machine)
                             val machineId = session.metadata?.machineId
@@ -193,6 +201,7 @@ internal fun rememberSessionMenus(
 private data class SessionMenuStrings(
     val title: String,
     val details: String,
+    val newChatHere: String,
     val resume: String,
     val fork: String,
     val duplicate: String,

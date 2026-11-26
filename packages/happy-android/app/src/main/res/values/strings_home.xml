@@ -14,6 +14,7 @@
     <string name="home_create_workspace">Create workspace</string>
     <string name="home_create_workspace_in">Create workspace in %1$s</string>
     <string name="home_new_chat_in">New chat in %1$s</string>
+    <string name="session_new_chat_here">New chat here</string>
     <!-- machine/[id].tsx -->
     <string name="machine_not_found">Machine not found</string>
     <string name="machine_unknown">unknown machine</string>

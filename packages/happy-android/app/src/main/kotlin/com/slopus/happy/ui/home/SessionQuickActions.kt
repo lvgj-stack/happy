@@ -6,6 +6,7 @@ import com.slopus.happy.model.canLeaveTask
 import com.slopus.happy.model.forkSource
 import com.slopus.happy.model.isRig
 import com.slopus.happy.model.isTask
+import com.slopus.happy.model.newChatPlace
 import com.slopus.happy.model.taskCanArchive
 
 /** Why resume is offered but can't run, or null when it can (useSessionQuickActions getResumeAvailability). */
@@ -46,10 +47,12 @@ fun canForkSession(session: Session, machine: Machine?, continuationExperiments:
     continuationExperiments && !session.metadata.isRig() && session.forkSource() != null && machine?.isOnline == true
 
 /** The "Session" alert's rows, in order (useSessionQuickActions actionItems). */
-enum class SessionActionId { Details, Resume, Fork, Duplicate, CopyMetadata, CopyMetadataAndLogs, LeaveTask, Archive }
+enum class SessionActionId { Details, NewChatHere, Resume, Fork, Duplicate, CopyMetadata, CopyMetadataAndLogs, LeaveTask, Archive }
 
 fun sessionActionIds(session: Session, machine: Machine?, continuationExperiments: Boolean, devMode: Boolean): List<SessionActionId> = buildList {
     add(SessionActionId.Details)
+    // Android's own: a new chat in the same folder or worktree, where there is one to start in.
+    if (session.newChatPlace() != null) add(SessionActionId.NewChatHere)
     if (resumeAvailability(session, machine).canShowResume) add(SessionActionId.Resume)
     if (canForkSession(session, machine, continuationExperiments)) {
         add(SessionActionId.Fork)

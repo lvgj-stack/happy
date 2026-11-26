@@ -88,6 +88,15 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
     var alert by remember { mutableStateOf<Alert?>(null) }
     val showAlert = remember { { next: Alert -> alert = next } }
     var duplicating by remember { mutableStateOf<Session?>(null) }
+    val context = LocalContext.current
+    // A git worktree's "+" and a session's "New chat here": an empty chat on that very folder, its first line still to write.
+    val onNewChatIn = remember(services, context, navigation) {
+        { place: NewChatPlace ->
+            services.newSession(context.applicationContext)
+                .prepareCheckout(place.machineId, place.path, services.machine(place.machineId)?.metadata?.homeDir)
+            navigation.onCompose()
+        }
+    }
     val menus = rememberSessionMenus(
         services = services,
         continuationExperiments = settings.expResumeSession,
@@ -96,25 +105,17 @@ fun HomeListHost(graph: AppGraph, navigation: HomeNavigation, phone: Boolean = f
         onDetails = navigation.onDetails,
         onDuplicate = { duplicating = it },
         showAlert = showAlert,
+        onNewChatHere = onNewChatIn,
     )
     // A refusal no screen waited on, said once here (iOS a4049a03a).
     val refusal by services.archiver.refusal.collectAsStateWithLifecycle()
     LaunchedEffect(refusal, menus) {
         refusal?.let { menus.report(it); services.archiver.heard() }
     }
-    val context = LocalContext.current
     // ProjectHomeList's "+": an empty chat on a new workspace of that project, on the phone and in the tablet's detail.
     val onCreateWorkspace = remember(services, context, navigation) {
         { origin: WorkspaceOrigin ->
             services.newSession(context.applicationContext).prepareWorkspace(origin.machineId, origin.projectId, origin.path)
-            navigation.onCompose()
-        }
-    }
-    // A git worktree's "+": an empty chat on that very folder, its first line still to write.
-    val onNewChatIn = remember(services, context, navigation) {
-        { place: NewChatPlace ->
-            services.newSession(context.applicationContext)
-                .prepareCheckout(place.machineId, place.path, services.machine(place.machineId)?.metadata?.homeDir)
             navigation.onCompose()
         }
     }

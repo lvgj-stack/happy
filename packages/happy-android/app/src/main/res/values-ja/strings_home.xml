@@ -11,6 +11,7 @@
     <string name="home_create_workspace">ワークスペースを作成</string>
     <string name="home_create_workspace_in">%1$s にワークスペースを作成</string>
     <string name="home_new_chat_in">%1$s で新規チャット</string>
+    <string name="session_new_chat_here">ここで新規チャット</string>
     <string name="machine_not_found">マシンが見つかりません</string>
     <string name="machine_unknown">不明なマシン</string>
     <string name="machine_stop_daemon_confirm_title">デーモンを停止しますか？</string>

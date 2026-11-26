@@ -9,9 +9,12 @@ import com.slopus.happy.model.HomeModelFixtures.machineMetadata
 import com.slopus.happy.model.HomeModelFixtures.metadata
 import com.slopus.happy.model.HomeModelFixtures.rigMetadata
 import com.slopus.happy.model.HomeModelFixtures.session
+import com.slopus.happy.model.NewChatPlace
 import com.slopus.happy.model.ProjectHomeRow
 import com.slopus.happy.model.SessionListGrouping
 import com.slopus.happy.model.forkSource
+import com.slopus.happy.model.isTask
+import com.slopus.happy.model.newChatPlace
 import com.slopus.happy.model.Settings
 import com.slopus.happy.model.settings.LocalSettingsValues
 import com.slopus.happy.net.ConnectionStatus
@@ -328,14 +331,49 @@ class HomeListTest {
     @Test fun sessionMenuListsItsActionsInOrder() {
         val live = resumable(active = true) { put("path", "/repo") }
         assertEquals(
-            listOf(SessionActionId.Details, SessionActionId.Fork, SessionActionId.Duplicate, SessionActionId.Archive),
+            listOf(SessionActionId.Details, SessionActionId.NewChatHere, SessionActionId.Fork, SessionActionId.Duplicate, SessionActionId.Archive),
             sessionActionIds(live, resumeMachine, continuationExperiments = true, devMode = false),
         )
         assertEquals(
-            listOf(SessionActionId.Details, SessionActionId.Resume, SessionActionId.CopyMetadata, SessionActionId.CopyMetadataAndLogs, SessionActionId.Archive),
+            listOf(
+                SessionActionId.Details, SessionActionId.NewChatHere, SessionActionId.Resume,
+                SessionActionId.CopyMetadata, SessionActionId.CopyMetadataAndLogs, SessionActionId.Archive,
+            ),
             sessionActionIds(resumable(), resumeMachine, continuationExperiments = false, devMode = true),
         )
         assertTrue(live.forkSource() is ForkSource.Claude)
+    }
+
+    /** "New chat here" is for a chat in a folder of its computer: not a bot's, a task's, a Happy Agent project's or one with nowhere. */
+    @Test fun botsTasksAndHappyAgentProjectsOfferNoNewChatHere() {
+        val bot = session("bot", metadata = metadata {
+            put("machineId", "m1")
+            putJsonObject("bot") {
+                put("id", "b1")
+                put("name", "Helper")
+                put("username", "helper")
+                put("workspaceId", "w")
+                put("orderKey", "a")
+                put("systemKey", kotlinx.serialization.json.JsonNull)
+            }
+        })
+        val task = session("task", metadata = metadata {
+            put("machineId", "m1")
+            putJsonObject("task") { put("id", "t1"); put("name", "Task") }
+        })
+        val project = session("project", metadata = rigMetadata(projectId = "p1", projectName = "happy"))
+        val nowhere = session("nowhere", metadata = metadata(path = " ") { put("machineId", "m1") })
+        val noMachine = session("no-machine", metadata = metadata(path = "/repo"))
+        assertTrue(task.isTask)
+        for (session in listOf(bot, task, project, nowhere, noMachine)) {
+            assertFalse(session.id, SessionActionId.NewChatHere in sessionActionIds(session, null, continuationExperiments = false, devMode = false))
+        }
+        val here = session("here", metadata = metadata(path = "/h/repo/.dev/worktree/calm") { put("machineId", "m1") })
+        assertEquals(
+            listOf(SessionActionId.Details, SessionActionId.NewChatHere, SessionActionId.Archive),
+            sessionActionIds(here, null, continuationExperiments = false, devMode = false),
+        )
+        assertEquals(NewChatPlace("m1", "/h/repo/.dev/worktree/calm"), here.newChatPlace())
     }
 
     @Test fun timestampsReadLikeAChatList() {
